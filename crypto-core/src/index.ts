@@ -1,26 +1,19 @@
-// crypto-core — Unified AES-256-CBC streaming encryption core.
-// ONE TypeScript source that runs identically in the browser (WebWorker) and in
-// Bun (backend). Provides:
-//   - AES-256-CBC + PKCS7 streaming (TB-scale, low memory)
-//   - PBKDF2-HMAC-SHA256 key derivation (100000 iterations) via WebCrypto
-//   - Unified ENC1 file format with structured metadata + embedded thumbnail
-//   - Unified ENT1 text format
-//   - Header inspection WITHOUT password (fast listing / preview)
-// Cross-platform 100% compatibility is guaranteed because both ends execute the
-// exact same code with the exact same formats.
+// crypto-core barrel — unified AES-256-CBC streaming encryption built on a
+// SINGLE Zig source compiled to wasm (browser) + shared lib (Bun). The format
+// layer is isomorphic TS; the crypto primitives are Zig-compiled.
 
-export * from "./compat.js";
-export * from "./aes-stream.js";
-export * from "./file.js";
-export * from "./text.js";
+export * from "./format.js";
+export type { ZigCore } from "./zig-loader-types.js";
 
 export const CORE_INFO = {
-  algorithm: "AES-256-CBC + PKCS7",
-  kdf: "PBKDF2-HMAC-SHA256",
-  iterations: 100000,
+  algorithm: "AES-256-CBC + PKCS7 (Zig)",
+  kdf: "PBKDF2-HMAC-SHA256 (Zig)",
+  iterations: 100_000,
   fileMagic: "ENC1",
   textMagic: "ENT1",
   version: 1,
+  coreLang: "Zig 0.14",
+  artifacts: ["crypto.wasm (browser WebWorker)", "libcryptocore.so (Bun FFI)"],
   description:
-    "Unified isomorphic crypto core (browser WebWorker + Bun). Same algorithm, same formats, full cross-compatibility.",
+    "Unified crypto core: ONE Zig source compiled to wasm + native lib. Same algorithm, same formats, full cross-platform compatibility.",
 };

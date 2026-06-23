@@ -52,3 +52,29 @@ prompt
 server.log
 # Skills directory
 /skills/
+# Project-specific
+/tmp/
+*.log
+dev.log
+server.log
+vite.log
+download/
+upload/
+.zscripts/dev.log
+.zscripts/dev.pid
+.zscripts/mini-service-*.log
+backend/server.log
+backend/libcryptocore.so
+backend/libcryptocore.dylib
+backend/libcryptocore.dll
+frontend/vite.log
+frontend/node_modules/.vite/
+zig-src/.zig-cache/
+zig-src/zig-out/
+zig-src/*.o
+zig-src/*.a
+zig-src/libcrypto_core.so
+zig-src/crypto_core.wasm
+zig-src/crypto_core.wasm.o
+# Keep the built wasm in public (needed at runtime)
+!frontend/public/crypto.wasm

@@ -1,11 +1,10 @@
 import { createSignal, Show } from "solid-js";
-import { ScanSearch, Image as ImageIcon, FileQuestion, Sparkles } from "lucide-solid";
 import { mode, toast } from "../store";
 import { workerApi, type InspectResult } from "../lib/worker";
 import { backendApi } from "../lib/api";
 import { formatBytes, formatDate } from "../lib/format";
-import { Card, SectionTitle, Stat } from "./ui";
 import { FileDrop } from "./FileDrop";
+import { Empty } from "./ui";
 
 export function InspectTab() {
   const [result, setResult] = createSignal<InspectResult | null>(null);
@@ -14,91 +13,47 @@ export function InspectTab() {
   const [loading, setLoading] = createSignal(false);
 
   async function inspect(files: File[]) {
-    const f = files[0];
-    if (!f) return;
-    setFileName(f.name);
-    setFileSize(f.size);
-    setResult(null);
-    setLoading(true);
-    try {
-      const r = mode() === "local" ? await workerApi.inspectFile(f) : await backendApi.inspect(f);
-      setResult(r);
-      toast("success", "文件头读取成功（免密）");
-    } catch (e: any) {
-      toast("error", "读取失败：" + (e?.message || "非 ENC1 文件"));
-    } finally {
-      setLoading(false);
-    }
+    const f = files[0]; if (!f) return;
+    setFileName(f.name); setFileSize(f.size); setResult(null); setLoading(true);
+    try { setResult(mode() === "local" ? await workerApi.inspectFile(f) : await backendApi.inspect(f)); toast("success", "文件头读取成功"); }
+    catch (e: any) { toast("error", "读取失败：" + (e?.message || "")); }
+    finally { setLoading(false); }
   }
 
   return (
-    <Card>
-      <SectionTitle
-        icon={<ScanSearch size={18} />}
-        title="密文预览 · 免密文件头检测"
-        desc="无需密码、无需加载完整文件，直接读取加密文件头元信息与内嵌缩略图"
-      />
-      <FileDrop
-        zone="inspect"
-        label={fileName() || "点击或拖入 .enc 加密文件"}
-        hint={fileName() ? `${formatBytes(fileSize())}` : "用于加密文件列表预览、碎片文件识别"}
-        onFiles={inspect}
-        icon={<ScanSearch size={28} />}
-      />
-
-      <Show when={loading()}>
-        <div class="mt-6 text-center text-sm text-slate-400 animate-pulse">正在解析文件头…</div>
-      </Show>
-
+    <div class="surface p-4">
+      <div class="text-[13px] font-semibold mb-1">密文预览 · 免密文件头检测</div>
+      <div class="text-[11px] text-[var(--color-muted)] mb-3">无需密码、无需加载完整文件，直接读取元信息与缩略图</div>
+      <FileDrop zone="inspect" label={fileName() || "选择 .enc 文件"} hint={fileName() ? formatBytes(fileSize()) : "用于列表预览、碎片文件识别"} onFiles={inspect} icon="🔍" />
+      <Show when={loading()}><Empty>正在解析文件头…</Empty></Show>
       <Show when={result()}>
-        <div class="mt-5 space-y-4">
-          <div class="flex flex-col sm:flex-row gap-5 rounded-2xl bg-black/30 border border-white/5 p-5">
-            <Show when={result()!.thumbnailBase64}>
-              <div class="flex flex-col items-center gap-2">
-                <img
-                  src={`data:image/jpeg;base64,${result()!.thumbnailBase64}`}
-                  class="w-36 h-36 rounded-xl object-cover border border-white/10 shadow-lg"
-                  alt="缩略图"
-                />
-                <span class="chip bg-brand-500/15 text-brand-300">
-                  <Sparkles size={11} /> 内嵌缩略图
-                </span>
+        <div class="mt-3 space-y-3">
+          <div class="flex flex-col sm:flex-row gap-3 rounded-md bg-black/30 border border-[var(--color-border)] p-3">
+            <Show when={result()!.thumbnailBase64} fallback={<div class="w-24 h-24 rounded border border-[var(--color-border)] bg-white/5 flex items-center justify-center text-[var(--color-muted)] text-xs">无缩略图</div>}>
+              <div class="flex flex-col items-center gap-1">
+                <img src={`data:image/jpeg;base64,${result()!.thumbnailBase64}`} class="w-24 h-24 rounded object-cover border border-[var(--color-border)]" alt="" />
+                <span class="text-[10px] text-[var(--color-accent)]">内嵌缩略图</span>
               </div>
             </Show>
-            <Show when={!result()!.thumbnailBase64}>
-              <div class="w-36 h-36 rounded-xl border border-white/10 bg-white/5 flex flex-col items-center justify-center gap-2">
-                <FileQuestion size={30} class="text-slate-600" />
-                <span class="text-[11px] text-slate-500">无缩略图</span>
-              </div>
-            </Show>
-            <div class="flex-1 grid grid-cols-2 gap-2">
-              <Stat label="原始文件名" value={result()!.meta.originalName} />
-              <Stat label="原始大小" value={formatBytes(result()!.meta.originalSize)} mono />
-              <Stat label="MIME 类型" value={result()!.meta.mimeType} />
-              <Stat label="扩展名" value={result()!.meta.extension || "—"} />
-              <Stat label="原文件创建时间" value={formatDate(result()!.meta.createdAt)} />
-              <Stat label="加密时间" value={formatDate(result()!.meta.encryptedAt)} />
-              <Stat label="密文数据偏移" value={`${result()!.dataOffset} 字节`} mono />
-              <Stat label="含缩略图" value={result()!.hasThumbnail ? "是" : "否"} />
+            <div class="flex-1 grid grid-cols-2 gap-1">
+              <div class="stat"><span class="stat-k">文件名</span><span class="stat-v">{result()!.meta.originalName}</span></div>
+              <div class="stat"><span class="stat-k">大小</span><span class="stat-v">{formatBytes(result()!.meta.originalSize)}</span></div>
+              <div class="stat"><span class="stat-k">MIME</span><span class="stat-v">{result()!.meta.mimeType}</span></div>
+              <div class="stat"><span class="stat-k">扩展名</span><span class="stat-v">{result()!.meta.extension || "—"}</span></div>
+              <div class="stat"><span class="stat-k">创建时间</span><span class="stat-v">{formatDate(result()!.meta.createdAt)}</span></div>
+              <div class="stat"><span class="stat-k">加密时间</span><span class="stat-v">{formatDate(result()!.meta.encryptedAt)}</span></div>
+              <div class="stat"><span class="stat-k">数据偏移</span><span class="stat-v">{result()!.dataOffset} B</span></div>
+              <div class="stat"><span class="stat-k">含缩略图</span><span class="stat-v">{result()!.hasThumbnail ? "是" : "否"}</span></div>
             </div>
           </div>
-
           <Show when={result()!.meta.note}>
-            <div class="rounded-xl bg-brand-500/5 border border-brand-500/15 p-3.5 text-sm text-slate-200">
-              <span class="text-xs text-brand-400 font-medium">备注</span>
-              <div class="mt-1">{result()!.meta.note}</div>
+            <div class="rounded-md bg-[var(--color-accent-dim)] border border-[var(--color-accent)]/20 p-2.5 text-[12px]">
+              <span class="text-[var(--color-accent)] text-[11px]">备注</span><div class="mt-0.5">{result()!.meta.note}</div>
             </div>
           </Show>
-
-          <div class="rounded-xl bg-white/[0.02] border border-white/5 p-3.5 text-xs text-slate-400 leading-relaxed">
-            <div class="flex items-center gap-1.5 text-slate-300 mb-1.5">
-              <ImageIcon size={13} class="text-brand-400" /> 密文可视化预览
-            </div>
-            该加密文件携带完整的结构化元信息与缩略图。即便文件未下载完成、或仅有碎片密文，
-            也可直接识别其内容类型与预览图——传统加密文件完全黑盒，本方案支持「密文可视化预览」。
-          </div>
+          <div class="text-[11px] text-[var(--color-muted)] leading-relaxed">加密文件携带结构化元信息与缩略图。即便文件未下载完成或仅有碎片密文，也可识别内容类型与预览图——传统加密文件完全黑盒，本方案支持密文可视化预览。</div>
         </div>
       </Show>
-    </Card>
+    </div>
   );
 }
