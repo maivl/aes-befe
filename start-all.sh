@@ -4,30 +4,26 @@ exec 2>&1
 cd /home/z/my-project
 
 # backend watchdog
-start_backend() {
-  cd /home/z/my-project/backend
+(
   while true; do
+    cd /home/z/my-project/backend
     bun src/index.ts >> /home/z/my-project/backend/server.log 2>&1
-    echo "[$(date)] backend exited, restarting in 2s..." >> /home/z/my-project/backend/server.log
+    echo "[$(date)] backend exited ($?), restarting in 2s..." >> /home/z/my-project/backend/server.log
     sleep 2
   done
-}
-setsid bash -c "$(declare -f start_backend); start_backend" </dev/null >/dev/null 2>&1 &
-disown
-echo "Backend watchdog started"
+) &
+echo "Backend watchdog started (PID $!)"
 
 # Vite watchdog
-start_vite() {
-  cd /home/z/my-project/frontend
+(
   while true; do
+    cd /home/z/my-project/frontend
     ./node_modules/.bin/vite --port 3000 --host 0.0.0.0 >> /home/z/my-project/frontend/vite.log 2>&1
-    echo "[$(date)] vite exited, restarting in 2s..." >> /home/z/my-project/frontend/vite.log
+    echo "[$(date)] vite exited ($?), restarting in 2s..." >> /home/z/my-project/frontend/vite.log
     sleep 2
   done
-}
-setsid bash -c "$(declare -f start_vite); start_vite" </dev/null >/dev/null 2>&1 &
-disown
-echo "Vite watchdog started"
+) &
+echo "Vite watchdog started (PID $!)"
 
 # wait for both
 for i in $(seq 1 30); do
@@ -38,3 +34,5 @@ for i in $(seq 1 30); do
   sleep 1
 done
 echo "Startup complete."
+# Keep the script alive so background jobs aren't orphaned
+wait

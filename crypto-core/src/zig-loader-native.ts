@@ -21,7 +21,6 @@ const lib = dlopen(libPath, {
   zig_cbc_decrypt_oneshot: { args: [FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.u64, FFIType.ptr], returns: FFIType.i64 },
   zig_sha256: { args: [FFIType.ptr, FFIType.u64, FFIType.ptr], returns: FFIType.i32 },
   zig_hmac_sha256: { args: [FFIType.ptr, FFIType.u64, FFIType.ptr, FFIType.u64, FFIType.ptr], returns: FFIType.i32 },
-  zig_password_emoji: { args: [FFIType.ptr, FFIType.u64], returns: FFIType.u32 },
 });
 
 const e = lib.symbols as any;
@@ -113,9 +112,6 @@ export function getZigCore(): ZigCore {
       const out = new Uint8Array(32);
       e.zig_hmac_sha256(p(key), BigInt(key.length), p(msg), BigInt(msg.length), p(out));
       return out;
-    },
-    passwordEmoji(derivedKey) {
-      return n(e.zig_password_emoji(p(derivedKey), BigInt(derivedKey.length)));
     },
   };
 }

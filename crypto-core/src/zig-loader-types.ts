@@ -16,5 +16,4 @@ export interface ZigCore {
   cbcDecryptOneshot(key: Uint8Array, iv: Uint8Array, input: Uint8Array): Uint8Array;
   sha256(input: Uint8Array): Uint8Array;
   hmacSha256(key: Uint8Array, msg: Uint8Array): Uint8Array;
-  passwordEmoji(derivedKey: Uint8Array): number; // 0..95 index
 }

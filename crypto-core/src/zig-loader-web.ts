@@ -56,7 +56,6 @@ export interface ZigCore {
   cbcDecryptOneshot(key: Uint8Array, iv: Uint8Array, input: Uint8Array): Uint8Array;
   sha256(input: Uint8Array): Uint8Array;
   hmacSha256(key: Uint8Array, msg: Uint8Array): Uint8Array;
-  passwordEmoji(derivedKey: Uint8Array): number;
 }
 
 export async function getZigCore(): Promise<ZigCore> {
@@ -155,11 +154,6 @@ export async function getZigCore(): Promise<ZigCore> {
       mem().set(msg, mp);
       e.zig_hmac_sha256(kp, key.length, mp, msg.length, op);
       return mem().slice(op, op + 32);
-    },
-    passwordEmoji(derivedKey) {
-      const kp = alloc(derivedKey.length);
-      mem().set(derivedKey, kp);
-      return toNum(e.zig_password_emoji(kp, derivedKey.length));
     },
   };
 }

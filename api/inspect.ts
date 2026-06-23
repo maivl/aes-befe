@@ -1,5 +1,5 @@
-// Vercel serverless — /api/inspect (免密 header reading)
-import { inspectFileStream, bytesToBase64 } from "../../crypto-core/src/format";
+// Vercel Edge Function — /api/inspect (免密 header reading)
+import { inspectFileStream, bytesToBase64 } from "../_lib/crypto";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",

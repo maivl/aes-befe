@@ -146,10 +146,5 @@ export async function getZigCore(): Promise<ZigCore> {
       const sig = await crypto.subtle.sign("HMAC", cryptoKey, msg as BufferSource);
       return new Uint8Array(sig);
     },
-    passwordEmoji(derivedKey) {
-      let sum = 0;
-      for (let i = 0; i < derivedKey.length; i++) sum += derivedKey[i];
-      return sum % 96;
-    },
   } as ZigCore; // cast: async methods return Promises which the format layer awaits
 }

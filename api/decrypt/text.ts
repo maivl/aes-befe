@@ -1,6 +1,5 @@
-// Vercel serverless — /api/decrypt/text
-import { getZigCoreWebCrypto } from "../../../crypto-core/src/webcrypto-loader";
-import { decryptTextFromBase64, utf8Encode } from "../../../crypto-core/src/format";
+// Vercel Edge Function — /api/decrypt/text
+import { decryptTextFromBase64, utf8Encode } from "../../_lib/crypto";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -16,8 +15,7 @@ export default async function handler(req: Request): Promise<Response> {
     const { data, password } = await req.json();
     if (typeof data !== "string" || typeof password !== "string")
       return new Response(JSON.stringify({ error: "data and password required" }), { status: 400, headers: { "Content-Type": "application/json", ...CORS } });
-    const core = await getZigCoreWebCrypto();
-    const { text, meta } = await decryptTextFromBase64(core, data, utf8Encode(password));
+    const { text, meta } = await decryptTextFromBase64(data, utf8Encode(password));
     return new Response(JSON.stringify({ text, meta }), { headers: { "Content-Type": "application/json", ...CORS } });
   } catch (e: any) {
     return new Response(JSON.stringify({ error: e?.message || String(e) }), { status: 400, headers: { "Content-Type": "application/json", ...CORS } });

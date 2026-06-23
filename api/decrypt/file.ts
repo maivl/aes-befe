@@ -1,6 +1,5 @@
-// Vercel serverless — /api/decrypt/file
-import { getZigCoreWebCrypto } from "../../../crypto-core/src/webcrypto-loader";
-import { decryptFileStream, inspectFileStream, utf8Encode, type FileMeta } from "../../../crypto-core/src/format";
+// Vercel Edge Function — /api/decrypt/file
+import { decryptFileStream, inspectFileStream, utf8Encode, type FileMeta } from "../../_lib/crypto";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -24,9 +23,8 @@ export default async function handler(req: Request): Promise<Response> {
     let meta: FileMeta;
     try { meta = (await inspectFileStream(bytesGen(bytes))).meta; }
     catch { meta = { originalName: "decrypted.bin", originalSize: 0, mimeType: "application/octet-stream", extension: "bin", createdAt: "", encryptedAt: "", note: "" }; }
-    const core = await getZigCoreWebCrypto();
     const parts: Uint8Array[] = [];
-    for await (const c of decryptFileStream({ core, password: utf8Encode(password), ciphertext: bytesGen(bytes) }))
+    for await (const c of decryptFileStream({ password: utf8Encode(password), ciphertext: bytesGen(bytes) }))
       parts.push(c);
     let total = 0; for (const c of parts) total += c.length;
     const out = new Uint8Array(total); let o = 0; for (const c of parts) { out.set(c, o); o += c.length; }

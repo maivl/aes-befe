@@ -7,6 +7,7 @@ import { generateThumbnail, type ThumbResult } from "../lib/thumbnail";
 import { formatBytes, formatDate, downloadBlob, guessMime, getExtension } from "../lib/format";
 import { ProgressBar, Empty } from "./ui";
 import { FileDrop } from "./FileDrop";
+import { PasswordEmojiPreview } from "./PasswordEmojiPreview";
 
 export function FileTab() {
   const [encFile, setEncFile] = createSignal<File | null>(null);
@@ -124,7 +125,10 @@ export function FileTab() {
           <div class="mt-4 space-y-3">
             <div>
               <label class="label">加密密码</label>
-              <input class="input" type="password" placeholder="输入密码" value={encPw()} onInput={(e) => setEncPw(e.target.value)} />
+              <div class="flex gap-2 items-center">
+                <input class="input" type="password" placeholder="输入密码" value={encPw()} onInput={(e) => setEncPw(e.target.value)} />
+                <PasswordEmojiPreview password={encPw()} />
+              </div>
             </div>
             <div>
               <label class="label">备注（可选，写入文件头）</label>

@@ -3,6 +3,7 @@ import { mode, toast } from "../store";
 import { workerApi } from "../lib/worker";
 import { backendApi } from "../lib/api";
 import { formatDate } from "../lib/format";
+import { PasswordEmojiPreview } from "./PasswordEmojiPreview";
 
 export function TextTab() {
   const [text, setText] = createSignal("");
@@ -83,7 +84,10 @@ export function TextTab() {
           <div class="grid grid-cols-2 gap-3">
             <div>
               <label class="label">密码</label>
-              <input class="input" type="password" placeholder="密码" value={tPw()} onInput={(e) => setTPw(e.target.value)} />
+              <div class="flex gap-2 items-center">
+                <input class="input" type="password" placeholder="密码" value={tPw()} onInput={(e) => setTPw(e.target.value)} />
+                <PasswordEmojiPreview password={tPw()} />
+              </div>
             </div>
             <div>
               <label class="label">备注</label>
@@ -118,7 +122,10 @@ export function TextTab() {
           </div>
           <div>
             <label class="label">密码</label>
-            <input class="input" type="password" placeholder="密码" value={dPw()} onInput={(e) => setDPw(e.target.value)} />
+            <div class="flex gap-2 items-center">
+              <input class="input" type="password" placeholder="密码" value={dPw()} onInput={(e) => setDPw(e.target.value)} />
+              <PasswordEmojiPreview password={dPw()} />
+            </div>
           </div>
           <button class="btn btn-primary w-full" disabled={dBusy()} onClick={doDec}>
             {dBusy() ? "解密中…" : "解密文本"}
@@ -133,7 +140,8 @@ export function TextTab() {
             </div>
           </Show>
           <Show when={decMeta()}>
-            <div class="grid grid-cols-2 gap-2">
+            <div class="grid grid-cols-3 gap-2">
+              <div class="stat"><span class="stat-k">密码指纹</span><span class="stat-v text-base">{decMeta()!.passwordEmoji || "—"}</span></div>
               <div class="stat"><span class="stat-k">加密时间</span><span class="stat-v">{formatDate(decMeta()!.createdAt)}</span></div>
               <div class="stat"><span class="stat-k">备注</span><span class="stat-v">{decMeta()!.note || "—"}</span></div>
             </div>

@@ -1,6 +1,5 @@
-// Vercel serverless — /api/encrypt/file
-import { getZigCoreWebCrypto } from "../../../crypto-core/src/webcrypto-loader";
-import { encryptFileStream, utf8Encode, type FileMeta } from "../../../crypto-core/src/format";
+// Vercel Edge Function — /api/encrypt/file
+import { encryptFileStream, utf8Encode, type FileMeta } from "../../_lib/crypto";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -25,9 +24,8 @@ export default async function handler(req: Request): Promise<Response> {
     let thumbnail: Uint8Array | undefined;
     const tf = form.get("thumbnail");
     if (tf instanceof File) thumbnail = new Uint8Array(await tf.arrayBuffer());
-    const core = await getZigCoreWebCrypto();
     const parts: Uint8Array[] = [];
-    for await (const c of encryptFileStream({ core, meta, thumbnail, password: utf8Encode(password), plaintext: bytesGen(fileBytes) }))
+    for await (const c of encryptFileStream({ meta, thumbnail, password: utf8Encode(password), plaintext: bytesGen(fileBytes) }))
       parts.push(c);
     let total = 0; for (const c of parts) total += c.length;
     const out = new Uint8Array(total); let o = 0; for (const c of parts) { out.set(c, o); o += c.length; }

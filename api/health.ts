@@ -1,5 +1,5 @@
-// Vercel serverless — /api/health
-import { CORE_INFO } from "../../crypto-core/src/format";
+// Vercel Edge Function — /api/health
+import { CORE_INFO } from "../_lib/crypto";
 
 export const config = { runtime: "edge" };
 
