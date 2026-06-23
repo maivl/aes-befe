@@ -15,6 +15,7 @@ export function FileTab() {
   const [encNote, setEncNote] = createSignal("");
   const [embedThumb, setEmbedThumb] = createSignal(true);
   const [thumb, setThumb] = createSignal<ThumbResult | null>(null);
+  const [customThumbFile, setCustomThumbFile] = createSignal<File | null>(null);
   const [busy, setBusy] = createSignal(false);
   const [progress, setProgress] = createSignal<Progress | null>(null);
   const [resultBlob, setResultBlob] = createSignal<Blob | null>(null);
@@ -31,12 +32,24 @@ export function FileTab() {
     setEncFile(f);
     setResultBlob(null);
     setThumb(null);
+    setCustomThumbFile(null);
     if (f && embedThumb() && /image|video/.test(f.type)) setThumb(await generateThumbnail(f));
   }
   async function toggleThumb(v: boolean) {
     setEmbedThumb(v);
-    if (v && encFile() && !thumb() && /image|video/.test(encFile()!.type)) setThumb(await generateThumbnail(encFile()!));
-    if (!v) setThumb(null);
+    if (v && encFile() && !thumb() && !customThumbFile() && /image|video/.test(encFile()!.type)) setThumb(await generateThumbnail(encFile()!));
+    if (!v) { setThumb(null); setCustomThumbFile(null); }
+  }
+  // Custom thumbnail upload — works for ANY file type (not just images/videos)
+  async function pickCustomThumb(files: File[]) {
+    const f = files[0];
+    if (!f) return;
+    if (!f.type.startsWith("image/")) { toast("error", "请选择图片文件"); return; }
+    setCustomThumbFile(f);
+    // Resize the uploaded image to a small thumbnail
+    const t = await generateThumbnail(f);
+    if (t) { setThumb(t); toast("success", "自定义缩略图已设置"); }
+    else toast("error", "缩略图生成失败");
   }
   async function doEnc() {
     const f = encFile();
@@ -136,8 +149,27 @@ export function FileTab() {
             </div>
             <label class="flex items-center gap-2 text-[13px] text-[var(--color-fg-secondary)] cursor-pointer">
               <input type="checkbox" class="w-4 h-4 accent-[var(--color-accent)]" checked={embedThumb()} onChange={(e) => toggleThumb(e.target.checked)} />
-              嵌入缩略图（图片/视频自动生成）
+              嵌入缩略图（图片/视频自动生成或自定义上传）
             </label>
+
+            <Show when={embedThumb()}>
+              <div class="flex items-center gap-2">
+                <button
+                  class="btn btn-ghost !py-1.5 !px-3 text-[12px]"
+                  onClick={() => {
+                    const inp = document.createElement("input");
+                    inp.type = "file"; inp.accept = "image/*";
+                    inp.onchange = () => { if (inp.files?.[0]) pickCustomThumb([inp.files[0]]); };
+                    inp.click();
+                  }}
+                >
+                  📎 上传自定义缩略图
+                </button>
+                <Show when={customThumbFile()}>
+                  <span class="text-[11px] text-[var(--color-muted)] truncate max-w-[150px]">{customThumbFile()!.name}</span>
+                </Show>
+              </div>
+            </Show>
 
             <Show when={thumb()}>
               <div class="flex items-center gap-3 rounded-xl bg-[var(--color-surface)] border border-[var(--color-border)] p-3">
@@ -147,7 +179,10 @@ export function FileTab() {
                   alt=""
                 />
                 <div class="text-[12px] text-[var(--color-muted)]">
-                  <div class="text-[var(--color-fg)] font-medium">{thumb()!.width}×{thumb()!.height}</div>
+                  <div class="text-[var(--color-fg)] font-medium">
+                    {thumb()!.width}×{thumb()!.height}
+                    <Show when={customThumbFile()}><span class="text-[var(--color-accent)] ml-1">· 自定义</span></Show>
+                  </div>
                   <div>{formatBytes(thumb()!.bytes.length)}</div>
                   <div class="text-[var(--color-success)] mt-0.5">将嵌入文件头，可免密预览</div>
                 </div>
