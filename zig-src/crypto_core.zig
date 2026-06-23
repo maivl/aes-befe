@@ -55,7 +55,9 @@ fn free_ctx(c: *CbcCtx) void {
 // JS calls zig_alloc to get a pointer for input/output buffers. This avoids
 // collisions with Zig's static data (ctx_pool etc.) that caused "memory access
 // out of bounds" when the JS-side bump allocator started at address 0.
-const JS_HEAP_SIZE: usize = 4 * 1024 * 1024; // 4MB scratch (wasm .bss, no binary cost)
+// 64MB is enough for large file chunks (the worker feeds data in chunks, not
+// all at once). If a single allocation exceeds this, zig_alloc wraps around.
+const JS_HEAP_SIZE: usize = 64 * 1024 * 1024; // 64MB scratch
 var js_heap: [JS_HEAP_SIZE]u8 = undefined;
 var js_heap_off: usize = 0;
 

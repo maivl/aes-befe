@@ -20,13 +20,19 @@ let exports: any = null;
 
 async function loadWasm(): Promise<void> {
   if (wasm) return;
-  const res = await fetch("/crypto.wasm");
+  // Cache-bust: append a version query so browsers always fetch the latest
+  // wasm (avoids "zig_alloc is not a function" from stale cached versions).
+  const res = await fetch("/crypto.wasm?v=3");
   const bytes = new Uint8Array(await res.arrayBuffer());
   const mod = await WebAssembly.compile(bytes);
   const inst = await WebAssembly.instantiate(mod, {});
   wasm = inst;
   exports = inst.exports;
   memory = exports.memory as WebAssembly.Memory;
+  // Verify the critical export exists.
+  if (typeof (exports as any).zig_alloc !== "function") {
+    throw new Error("crypto.wasm is missing zig_alloc export — clear browser cache and reload");
+  }
 }
 
 /** Fresh view over current wasm memory. */

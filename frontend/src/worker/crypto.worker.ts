@@ -1,5 +1,7 @@
 // WebWorker: loads the Zig-compiled crypto.wasm and runs all crypto locally,
 // off the main thread. Plaintext never leaves the browser in local mode.
+// Files are read in chunks (not all at once) to support large files without
+// exceeding the wasm scratch heap.
 import { getZigCore } from "@crypto-core/src/zig-loader-web";
 import {
   encryptFileStream,
@@ -27,6 +29,11 @@ type Req =
 
 function post(msg: any) { (self as any).postMessage(msg); }
 
+// Chunk size for streaming file reads — small enough to fit in the wasm heap
+// with room to spare, large enough for efficiency.
+const CHUNK_SIZE = 512 * 1024; // 512KB per chunk
+
+/** Single-shot iterable for a small buffer (headers, text). */
 function bytesIter(bytes: Uint8Array): AsyncIterable<Uint8Array> {
   return { [Symbol.asyncIterator]() {
     let sent = false;
@@ -34,6 +41,25 @@ function bytesIter(bytes: Uint8Array): AsyncIterable<Uint8Array> {
   } };
 }
 
+/** Chunked iterable over a Uint8Array — yields CHUNK_SIZE pieces with progress. */
+function chunkedBytesIter(bytes: Uint8Array, id: number, phase: string): AsyncIterable<Uint8Array> {
+  return { [Symbol.asyncIterator]() {
+    let off = 0;
+    const total = bytes.length;
+    return {
+      async next() {
+        if (off >= total) return { value: undefined, done: true as const };
+        const end = Math.min(off + CHUNK_SIZE, total);
+        const chunk = bytes.subarray(off, end);
+        off = end;
+        post({ id, type: "progress", done: off, total, phase });
+        return { value: chunk, done: false as const };
+      },
+    };
+  } };
+}
+
+/** Chunked iterable over a ReadableStream (file.stream()) with progress. */
 function countingIter(stream: ReadableStream<Uint8Array>, id: number, total: number, phase: string): AsyncIterable<Uint8Array> {
   const reader = stream.getReader();
   return { [Symbol.asyncIterator]() {
@@ -66,6 +92,8 @@ async function handle(req: Req) {
       post({ id, type: "done", blob, size: blob.size });
     } else if (type === "decryptFile") {
       const { file, password } = req;
+      // Read the full file to parse the header (need salt+iv from header).
+      // The ciphertext body is then streamed in chunks to the decryptor.
       const bytes = new Uint8Array(await file.arrayBuffer());
       let meta: FileMeta | null = null;
       let thumbnailBase64: string | undefined;
@@ -74,9 +102,9 @@ async function handle(req: Req) {
         meta = insp.meta;
         if (insp.thumbnail && insp.thumbnail.length) thumbnailBase64 = bytesToBase64(insp.thumbnail);
       } catch {}
-      post({ id, type: "progress", done: 0, total: bytes.length, phase: "解密中" });
+      // Stream the ciphertext in chunks so the wasm heap isn't overwhelmed.
       const parts: Uint8Array[] = [];
-      for await (const chunk of decryptFileStream({ core: c, password: utf8Encode(password), ciphertext: bytesIter(bytes) })) {
+      for await (const chunk of decryptFileStream({ core: c, password: utf8Encode(password), ciphertext: chunkedBytesIter(bytes, id, "解密中") })) {
         parts.push(chunk);
       }
       const blob = new Blob(parts, { type: meta?.mimeType || "application/octet-stream" });

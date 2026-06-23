@@ -1,12 +1,10 @@
-// Vercel Edge Function (catch-all) — handles ALL /api/* routes.
-// Self-contained: the crypto code is inlined to avoid Vercel's edge bundler
-// "unsupported modules" errors from cross-directory imports.
-// Produces byte-identical ciphertext to the Zig core (standard AES-256-CBC +
-// PKCS7 + PBKDF2-HMAC-SHA256), so files are 100% cross-compatible.
+// Shared crypto module for Vercel Edge Functions.
+// Sibling to the route files (same api/ directory) — Vercel's edge bundler
+// resolves same-directory imports correctly.
+// Produces byte-identical ciphertext to the Zig core (standard AES-256-CBC).
 
-// ============ INLINED CRYPTO CORE ============
-const MAGIC_FILE = "ENC1";
-const MAGIC_TEXT = "ENT1";
+export const MAGIC_FILE = "ENC1";
+export const MAGIC_TEXT = "ENT1";
 const VERSION = 1;
 const FLAG_HAS_THUMB = 0x01;
 const SALT_LEN = 16;
@@ -14,7 +12,7 @@ const IV_LEN = 16;
 const KEY_LEN = 32;
 const PBKDF2_ITERS = 100_000;
 
-const EMOJIS = [
+export const EMOJIS = [
   "😀","😃","😄","😁","😆","😅","😂","🤣","😊","😇","🙂","🙃","😉","😌","😍","🥰",
   "😘","😗","😙","😚","😋","😛","😝","😜","🤪","🤨","🧐","🤓","😎","🤩","🥳","😏",
   "😒","😞","😔","😟","😕","🙁","☹️","😣","😖","😫","😩","🥺","😢","😭","😤","😠",
@@ -23,17 +21,17 @@ const EMOJIS = [
   "🥴","🤢","🤮","🤧","😷","🤒","🤕","🤑","🤠","😈","👿","👹","👺","🤡","💩","👻",
 ];
 
-interface FileMeta {
+export interface FileMeta {
   originalName: string; originalSize: number; mimeType: string; extension: string;
   createdAt: string; encryptedAt: string; note: string;
   thumbnailMime?: string; thumbnailW?: number; thumbnailH?: number; passwordEmoji?: string;
 }
-interface TextMeta { createdAt: string; note: string; passwordEmoji?: string; }
-interface InspectResult { meta: FileMeta; hasThumbnail: boolean; thumbnailBase64?: string; dataOffset: number; }
+export interface TextMeta { createdAt: string; note: string; passwordEmoji?: string; }
+export interface InspectResult { meta: FileMeta; hasThumbnail: boolean; thumbnailBase64?: string; dataOffset: number; }
 
-const utf8Encode = (s: string): Uint8Array => new TextEncoder().encode(s);
-const utf8Decode = (b: Uint8Array): string => new TextDecoder().decode(b);
-function concat(parts: Uint8Array[]): Uint8Array {
+export const utf8Encode = (s: string): Uint8Array => new TextEncoder().encode(s);
+export const utf8Decode = (b: Uint8Array): string => new TextDecoder().decode(b);
+export function concat(parts: Uint8Array[]): Uint8Array {
   let t = 0; for (const p of parts) t += p.length;
   const o = new Uint8Array(t); let off = 0;
   for (const p of parts) { o.set(p, off); off += p.length; }
@@ -43,14 +41,14 @@ function u32le(n: number): Uint8Array {
   const b = new Uint8Array(4); b[0]=n&0xff; b[1]=(n>>>8)&0xff; b[2]=(n>>>16)&0xff; b[3]=(n>>>24)&0xff; return b;
 }
 function readU32le(b: Uint8Array, o: number): number { return (b[o]|(b[o+1]<<8)|(b[o+2]<<16)|(b[o+3]<<24))>>>0; }
-function bytesToBase64(bytes: Uint8Array): string {
+export function bytesToBase64(bytes: Uint8Array): string {
   let bin = ""; const C = 0x8000;
   for (let i = 0; i < bytes.length; i += C) bin += String.fromCharCode.apply(null, bytes.subarray(i, i+C) as unknown as number[]);
   return btoa(bin);
 }
-function randomBytes(n: number): Uint8Array { const o = new Uint8Array(n); crypto.getRandomValues(o); return o; }
+export function randomBytes(n: number): Uint8Array { const o = new Uint8Array(n); crypto.getRandomValues(o); return o; }
 
-async function passwordToEmoji(password: Uint8Array): Promise<string> {
+export async function passwordToEmoji(password: Uint8Array): Promise<string> {
   const h = await crypto.subtle.digest("SHA-256", password);
   const bytes = new Uint8Array(h); let sum = 0;
   for (const b of bytes) sum += b;
@@ -82,8 +80,7 @@ async function aesDec(key: Uint8Array, iv: Uint8Array, data: Uint8Array): Promis
   return new Uint8Array(pt);
 }
 
-// ByteReader for parsing headers from async streams
-class ByteReader {
+export class ByteReader {
   private buf = new Uint8Array(0);
   private iter: AsyncIterator<Uint8Array>;
   constructor(src: AsyncIterable<Uint8Array>) { this.iter = src[Symbol.asyncIterator](); }
@@ -123,10 +120,9 @@ type Src = AsyncIterable<Uint8Array> | ReadableStream<Uint8Array>;
 function toIter(s: Src): AsyncIterable<Uint8Array> {
   return typeof (s as ReadableStream<Uint8Array>).getReader === "function" ? streamToIter(s as ReadableStream<Uint8Array>) : (s as AsyncIterable<Uint8Array>);
 }
-async function* bytesGen(b: Uint8Array): AsyncGenerator<Uint8Array> { yield b; }
+export async function* bytesGen(b: Uint8Array): AsyncGenerator<Uint8Array> { yield b; }
 
-// ---- ENC1 file ----
-async function* encryptFileStream(opts: { meta: FileMeta; thumbnail?: Uint8Array; password: Uint8Array; plaintext: Src }): AsyncGenerator<Uint8Array> {
+export async function* encryptFileStream(opts: { meta: FileMeta; thumbnail?: Uint8Array; password: Uint8Array; plaintext: Src }): AsyncGenerator<Uint8Array> {
   const salt = randomBytes(SALT_LEN); const iv = randomBytes(IV_LEN);
   const emoji = await passwordToEmoji(opts.password);
   const meta: FileMeta = { ...opts.meta, encryptedAt: opts.meta.encryptedAt || new Date().toISOString(), passwordEmoji: emoji };
@@ -140,7 +136,7 @@ async function* encryptFileStream(opts: { meta: FileMeta; thumbnail?: Uint8Array
   const chunks: Uint8Array[] = []; for await (const c of toIter(opts.plaintext)) { if (c.length) chunks.push(c); }
   yield await aesEnc(await deriveKey(opts.password, salt), iv, concat(chunks));
 }
-async function* decryptFileStream(opts: { password: Uint8Array; ciphertext: Src }): AsyncGenerator<Uint8Array> {
+export async function* decryptFileStream(opts: { password: Uint8Array; ciphertext: Src }): AsyncGenerator<Uint8Array> {
   const r = new ByteReader(toIter(opts.ciphertext));
   const magic = utf8Decode(await r.read(4)); if (magic !== MAGIC_FILE) throw new Error(`Not ENC1 (got "${magic}")`);
   const ver = (await r.read(1))[0]; if (ver !== VERSION) throw new Error(`Unsupported version ${ver}`);
@@ -152,7 +148,7 @@ async function* decryptFileStream(opts: { password: Uint8Array; ciphertext: Src 
   yield await aesDec(await deriveKey(opts.password, salt), iv, concat(chunks));
   (decryptFileStream as any).__meta = meta; (decryptFileStream as any).__thumb = thumb;
 }
-async function inspectFileStream(ct: Src): Promise<{ meta: FileMeta; thumbnail?: Uint8Array; dataOffset: number }> {
+export async function inspectFileStream(ct: Src): Promise<{ meta: FileMeta; thumbnail?: Uint8Array; dataOffset: number }> {
   const r = new ByteReader(toIter(ct));
   const magic = utf8Decode(await r.read(4)); if (magic !== MAGIC_FILE) throw new Error(`Not ENC1 (got "${magic}")`);
   const ver = (await r.read(1))[0]; if (ver !== VERSION) throw new Error(`Unsupported version ${ver}`);
@@ -163,8 +159,7 @@ async function inspectFileStream(ct: Src): Promise<{ meta: FileMeta; thumbnail?:
   return { meta, thumbnail, dataOffset: 8 + 4 + jl + 4 + tl + SALT_LEN + IV_LEN };
 }
 
-// ---- ENT1 text ----
-async function encryptText(text: string, password: Uint8Array, note = ""): Promise<Uint8Array> {
+export async function encryptText(text: string, password: Uint8Array, note = ""): Promise<Uint8Array> {
   const salt = randomBytes(SALT_LEN); const iv = randomBytes(IV_LEN);
   const emoji = await passwordToEmoji(password);
   const meta: TextMeta = { createdAt: new Date().toISOString(), note, passwordEmoji: emoji };
@@ -173,7 +168,7 @@ async function encryptText(text: string, password: Uint8Array, note = ""): Promi
   const prefix = new Uint8Array(8); prefix.set(utf8Encode(MAGIC_TEXT), 0); prefix[4] = VERSION;
   return concat([prefix, u32le(json.length), json, salt, iv, cipher]);
 }
-async function decryptText(blob: Uint8Array, password: Uint8Array): Promise<{ text: string; meta: TextMeta }> {
+export async function decryptText(blob: Uint8Array, password: Uint8Array): Promise<{ text: string; meta: TextMeta }> {
   const magic = utf8Decode(blob.subarray(0, 4)); if (magic !== MAGIC_TEXT) throw new Error(`Not ENT1 (got "${magic}")`);
   let off = 4; const ver = blob[off++]; if (ver !== VERSION) throw new Error(`Unsupported version ${ver}`);
   off++; off += 2; const jl = readU32le(blob, off); off += 4;
@@ -184,106 +179,20 @@ async function decryptText(blob: Uint8Array, password: Uint8Array): Promise<{ te
   const pt = await aesDec(await deriveKey(password, salt), iv, cipher);
   return { text: utf8Decode(pt), meta };
 }
-async function encryptTextToBase64(text: string, password: Uint8Array, note = ""): Promise<string> {
+export async function encryptTextToBase64(text: string, password: Uint8Array, note = ""): Promise<string> {
   return bytesToBase64(await encryptText(text, password, note));
 }
-async function decryptTextFromBase64(b64: string, password: Uint8Array): Promise<{ text: string; meta: TextMeta }> {
+export async function decryptTextFromBase64(b64: string, password: Uint8Array): Promise<{ text: string; meta: TextMeta }> {
   const bin = atob(b64); const out = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
   return decryptText(out, password);
 }
 
-const CORE_INFO = { algorithm: "AES-256-CBC + PKCS7", kdf: "PBKDF2-HMAC-SHA256", iterations: PBKDF2_ITERS, fileMagic: MAGIC_FILE, textMagic: MAGIC_TEXT, version: VERSION, backend: "vercel-edge" };
-
-// ============ ROUTER ============
-const CORS = {
+export const CORS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type",
 };
-
-function json(data: unknown, status = 200): Response {
+export function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json", ...CORS } });
 }
-
-export const config = { runtime: "edge" };
-
-export default async function handler(req: Request): Promise<Response> {
-  if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
-
-  const url = new URL(req.url);
-  const path = url.pathname;
-
-  try {
-    // ---- health ----
-    if (path === "/api/health") return json({ ok: true, core: CORE_INFO, backend: "vercel-edge" });
-
-    // ---- text encrypt ----
-    if (path === "/api/encrypt/text" && req.method === "POST") {
-      const { text, password, note } = await req.json();
-      if (typeof text !== "string" || typeof password !== "string") return json({ error: "text and password required" }, 400);
-      return json({ data: await encryptTextToBase64(text, utf8Encode(password), note || "") });
-    }
-
-    // ---- text decrypt ----
-    if (path === "/api/decrypt/text" && req.method === "POST") {
-      const { data, password } = await req.json();
-      if (typeof data !== "string" || typeof password !== "string") return json({ error: "data and password required" }, 400);
-      const { text, meta } = await decryptTextFromBase64(data, utf8Encode(password));
-      return json({ text, meta });
-    }
-
-    // ---- inspect (免密) ----
-    if (path === "/api/inspect" && req.method === "POST") {
-      const form = await req.formData();
-      const file = form.get("file") as File;
-      if (!file) return json({ error: "file required" }, 400);
-      const bytes = new Uint8Array(await file.arrayBuffer());
-      const { meta, thumbnail, dataOffset } = await inspectFileStream(bytesGen(bytes));
-      const hasThumb = !!thumbnail && thumbnail.length > 0;
-      return json({ meta, hasThumbnail: hasThumb, thumbnailBase64: hasThumb ? bytesToBase64(thumbnail!) : undefined, dataOffset });
-    }
-
-    // ---- file encrypt ----
-    if (path === "/api/encrypt/file" && req.method === "POST") {
-      const form = await req.formData();
-      const file = form.get("file") as File;
-      const password = String(form.get("password") || "");
-      const meta = JSON.parse(String(form.get("meta") || "{}")) as FileMeta;
-      if (!file) return json({ error: "file required" }, 400);
-      if (!password) return json({ error: "password required" }, 400);
-      const fileBytes = new Uint8Array(await file.arrayBuffer());
-      let thumbnail: Uint8Array | undefined;
-      const tf = form.get("thumbnail");
-      if (tf instanceof File) thumbnail = new Uint8Array(await tf.arrayBuffer());
-      const parts: Uint8Array[] = [];
-      for await (const c of encryptFileStream({ meta, thumbnail, password: utf8Encode(password), plaintext: bytesGen(fileBytes) })) parts.push(c);
-      let total = 0; for (const c of parts) total += c.length;
-      const out = new Uint8Array(total); let o = 0; for (const c of parts) { out.set(c, o); o += c.length; }
-      const filename = (meta.originalName || "file") + ".enc";
-      return new Response(out, { headers: { "Content-Type": "application/octet-stream", "Content-Disposition": `attachment; filename="${encodeURIComponent(filename)}"`, "Content-Length": String(total), ...CORS } });
-    }
-
-    // ---- file decrypt ----
-    if (path === "/api/decrypt/file" && req.method === "POST") {
-      const form = await req.formData();
-      const file = form.get("file") as File;
-      const password = String(form.get("password") || "");
-      if (!file) return json({ error: "file required" }, 400);
-      if (!password) return json({ error: "password required" }, 400);
-      const bytes = new Uint8Array(await file.arrayBuffer());
-      let meta: FileMeta;
-      try { meta = (await inspectFileStream(bytesGen(bytes))).meta; }
-      catch { meta = { originalName: "decrypted.bin", originalSize: 0, mimeType: "application/octet-stream", extension: "bin", createdAt: "", encryptedAt: "", note: "" }; }
-      const parts: Uint8Array[] = [];
-      for await (const c of decryptFileStream({ password: utf8Encode(password), ciphertext: bytesGen(bytes) })) parts.push(c);
-      let total = 0; for (const c of parts) total += c.length;
-      const out = new Uint8Array(total); let o = 0; for (const c of parts) { out.set(c, o); o += c.length; }
-      const filename = meta.originalName || "decrypted.bin";
-      return new Response(out, { headers: { "Content-Type": meta.mimeType || "application/octet-stream", "Content-Disposition": `attachment; filename="${encodeURIComponent(filename)}"`, "Content-Length": String(total), ...CORS } });
-    }
-
-    return json({ error: "Not found", path }, 404);
-  } catch (e: any) {
-    return json({ error: e?.message || String(e) }, 400);
-  }
-}
+export const CORE_INFO = { algorithm: "AES-256-CBC + PKCS7", kdf: "PBKDF2-HMAC-SHA256", iterations: PBKDF2_ITERS, fileMagic: MAGIC_FILE, textMagic: MAGIC_TEXT, version: VERSION, backend: "vercel-edge" };
