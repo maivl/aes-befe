@@ -1,0 +1,24 @@
+{
+  "name": "crypto-frontend",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --port 5173 --host 0.0.0.0",
+    "build": "vite build",
+    "preview": "vite preview --port 5173"
+  },
+  "dependencies": {
+    "aes-js": "^3.1.2",
+    "lucide-solid": "^1.21.0",
+    "solid-js": "^1.9.3"
+  },
+  "devDependencies": {
+    "vite": "^5.4.10",
+    "vite-plugin-solid": "^2.10.2",
+    "tailwindcss": "^3.4.14",
+    "postcss": "^8.4.47",
+    "autoprefixer": "^10.4.20",
+    "typescript": "^5.6.3"
+  }
+}
