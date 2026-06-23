@@ -1,7 +1,9 @@
 // format.ts — Shared isomorphic format layer (ENC1 file / ENT1 text).
-// Calls into the Zig-compiled crypto core (wasm on browser, .so on Bun) for the
-// actual AES-256-CBC + PBKDF2 primitives. Both ends run THIS same TypeScript,
-// so the format + algorithm are guaranteed identical across platforms.
+// Works with THREE backends that all implement ZigCore:
+//   1. Zig Wasm (browser WebWorker) — synchronous
+//   2. Zig .so (Bun FFI) — synchronous
+//   3. WebCrypto (Vercel serverless) — async
+// All `core.*` calls are `await`ed so both sync and async backends work.
 //
 // ENC1 layout:
 //   "ENC1" | ver(1) | flags(1) | rsv(2) | headerJsonLen(4 LE) | headerJson
@@ -37,26 +39,36 @@ export interface FileMeta {
   thumbnailMime?: string;
   thumbnailW?: number;
   thumbnailH?: number;
+  passwordEmoji?: string; // one-way hash of password → emoji (visual fingerprint)
 }
 
 export interface TextMeta {
   createdAt: string;
   note: string;
+  passwordEmoji?: string;
+}
+
+// ---- emoji table (same as user-provided) ----
+export const EMOJIS = [
+  "😀","😃","😄","😁","😆","😅","😂","🤣","😊","😇","🙂","🙃","😉","😌","😍","🥰",
+  "😘","😗","😙","😚","😋","😛","😝","😜","🤪","🤨","🧐","🤓","😎","🤩","🥳","😏",
+  "😒","😞","😔","😟","😕","🙁","☹️","😣","😖","😫","😩","🥺","😢","😭","😤","😠",
+  "😡","🤬","🤯","😳","🥵","🥶","😱","😨","😰","😥","😓","🤗","🤔","🤭","🤫","🤥",
+  "😶","😐","😑","😬","🙄","😯","😦","😧","😮","😲","🥱","😴","🤤","😪","😵","🤐",
+  "🥴","🤢","🤮","🤧","😷","🤒","🤕","🤑","🤠","😈","👿","👹","👺","🤡","💩","👻",
+];
+
+export function indexToEmoji(idx: number): string {
+  return EMOJIS[idx % EMOJIS.length];
 }
 
 // ---- platform-agnostic helpers ----
 
-export function utf8Encode(s: string): Uint8Array {
-  return new TextEncoder().encode(s);
-}
-export function utf8Decode(b: Uint8Array): string {
-  return new TextDecoder().decode(b);
-}
+export function utf8Encode(s: string): Uint8Array { return new TextEncoder().encode(s); }
+export function utf8Decode(b: Uint8Array): string { return new TextDecoder().decode(b); }
 export function concat(parts: Uint8Array[]): Uint8Array {
-  let total = 0;
-  for (const p of parts) total += p.length;
-  const out = new Uint8Array(total);
-  let o = 0;
+  let total = 0; for (const p of parts) total += p.length;
+  const out = new Uint8Array(total); let o = 0;
   for (const p of parts) { out.set(p, o); o += p.length; }
   return out;
 }
@@ -84,14 +96,13 @@ export function base64ToBytes(b64: string): Uint8Array {
   return out;
 }
 
-// ---- random source (platform-provided; both browser & Bun have crypto.getRandomValues) ----
 export function randomBytes(n: number): Uint8Array {
   const out = new Uint8Array(n);
   crypto.getRandomValues(out);
   return out;
 }
 
-// ---- ByteReader for parsing headers from an async stream ----
+// ---- ByteReader ----
 export class ByteReader {
   private buf = new Uint8Array(0);
   private iter: AsyncIterator<Uint8Array>;
@@ -159,11 +170,20 @@ export async function* encryptFileStream(opts: {
   password: Uint8Array;
   plaintext: Source;
 }): AsyncGenerator<Uint8Array> {
-  const meta: FileMeta = { ...opts.meta, encryptedAt: opts.meta.encryptedAt || new Date().toISOString() };
-  const hasThumb = !!opts.thumbnail && opts.thumbnail.length > 0;
-  const json = utf8Encode(JSON.stringify(meta));
   const salt = randomBytes(ZIG_CONST.SALT_LEN);
   const iv = randomBytes(ZIG_CONST.IV_LEN);
+  const key = await opts.core.deriveKey(opts.password, salt);
+  // One-way password fingerprint: hash the PBKDF2-derived key → emoji.
+  // Precomputing requires 100k iterations per candidate, making rainbow tables
+  // infeasible. The emoji is stored in the header for免密 visual identification.
+  const emojiIdx = await opts.core.passwordEmoji(key);
+  const meta: FileMeta = {
+    ...opts.meta,
+    encryptedAt: opts.meta.encryptedAt || new Date().toISOString(),
+    passwordEmoji: indexToEmoji(emojiIdx),
+  };
+  const hasThumb = !!opts.thumbnail && opts.thumbnail.length > 0;
+  const json = utf8Encode(JSON.stringify(meta));
 
   const prefix = new Uint8Array(8);
   prefix.set(utf8Encode(MAGIC_FILE), 0);
@@ -175,18 +195,13 @@ export async function* encryptFileStream(opts: {
   if (hasThumb) yield opts.thumbnail as Uint8Array;
   yield salt; yield iv;
 
-  const key = opts.core.deriveKey(opts.password, salt);
-  const ctx = opts.core.cbcEncryptBegin(key, iv);
-  try {
-    for await (const chunk of toIter(opts.plaintext)) {
-      if (chunk.length === 0) continue;
-      const out = opts.core.cbcEncryptUpdate(ctx, chunk);
-      if (out.length) yield out;
-    }
-    yield opts.core.cbcEncryptFinal(ctx);
-  } catch (e) {
-    throw e;
+  const ctx = await opts.core.cbcEncryptBegin(key, iv);
+  for await (const chunk of toIter(opts.plaintext)) {
+    if (chunk.length === 0) continue;
+    const out = await opts.core.cbcEncryptUpdate(ctx, chunk);
+    if (out.length) yield out;
   }
+  yield await opts.core.cbcEncryptFinal(ctx);
 }
 
 export async function* decryptFileStream(opts: {
@@ -206,14 +221,14 @@ export async function* decryptFileStream(opts: {
   const thumbnail = thumbLen > 0 ? await reader.read(thumbLen) : undefined;
   const salt = await reader.read(ZIG_CONST.SALT_LEN);
   const iv = await reader.read(ZIG_CONST.IV_LEN);
-  const key = opts.core.deriveKey(opts.password, salt);
-  const ctx = opts.core.cbcDecryptBegin(key, iv);
+  const key = await opts.core.deriveKey(opts.password, salt);
+  const ctx = await opts.core.cbcDecryptBegin(key, iv);
   for await (const chunk of reader.remaining()) {
     if (chunk.length === 0) continue;
-    const out = opts.core.cbcDecryptUpdate(ctx, chunk);
+    const out = await opts.core.cbcDecryptUpdate(ctx, chunk);
     if (out.length) yield out;
   }
-  yield opts.core.cbcDecryptFinal(ctx);
+  yield await opts.core.cbcDecryptFinal(ctx);
   (decryptFileStream as any).__meta = meta;
   (decryptFileStream as any).__thumb = thumbnail;
 }
@@ -237,13 +252,14 @@ export async function inspectFileStream(ciphertext: Source): Promise<{ meta: Fil
 // ================= TEXT (ENT1) =================
 
 export async function encryptText(core: ZigCore, text: string, password: Uint8Array, note = ""): Promise<Uint8Array> {
-  const meta: TextMeta = { createdAt: new Date().toISOString(), note };
-  const json = utf8Encode(JSON.stringify(meta));
   const salt = randomBytes(ZIG_CONST.SALT_LEN);
   const iv = randomBytes(ZIG_CONST.IV_LEN);
-  const key = core.deriveKey(password, salt);
+  const key = await core.deriveKey(password, salt);
+  const emojiIdx = await core.passwordEmoji(key);
+  const meta: TextMeta = { createdAt: new Date().toISOString(), note, passwordEmoji: indexToEmoji(emojiIdx) };
+  const json = utf8Encode(JSON.stringify(meta));
   const plain = utf8Encode(text);
-  const cipher = core.cbcEncryptOneshot(key, iv, plain);
+  const cipher = await core.cbcEncryptOneshot(key, iv, plain);
   const prefix = new Uint8Array(8);
   prefix.set(utf8Encode(MAGIC_TEXT), 0); prefix[4] = VERSION;
   return concat([prefix, u32le(json.length), json, salt, iv, cipher]);
@@ -260,8 +276,8 @@ export async function decryptText(core: ZigCore, blob: Uint8Array, password: Uin
   const salt = blob.subarray(off, off + ZIG_CONST.SALT_LEN); off += ZIG_CONST.SALT_LEN;
   const iv = blob.subarray(off, off + ZIG_CONST.IV_LEN); off += ZIG_CONST.IV_LEN;
   const cipher = blob.subarray(off);
-  const key = core.deriveKey(password, salt);
-  const plain = core.cbcDecryptOneshot(key, iv, cipher);
+  const key = await core.deriveKey(password, salt);
+  const plain = await core.cbcDecryptOneshot(key, iv, cipher);
   return { text: utf8Decode(plain), meta };
 }
 

@@ -1,13 +1,10 @@
 // zig-loader browser — loads crypto.wasm (compiled from the unified Zig source)
 // and exposes a typed JS API. Runs inside the WebWorker. All crypto primitives
-// execute in the Zig-compiled Wasm module; JS only drives memory + streaming.
+// execute in the Zig-compiled Wasm module.
 //
-// Key correctness notes:
-//  * Each call re-derives a fresh Uint8Array view over the (possibly grown) wasm
-//    memory — a view cached across a grow() would be detached.
-//  * Wasm i64 returns come back as BigInt; convert to Number for indexing.
-//  * Simple bump allocator over exported memory; the Zig core uses a static ctx
-//    pool so we only need scratch space for in/out buffers.
+// Memory: JS calls zig_alloc(n) to get a pointer inside Zig's own scratch heap
+// (past static data). This avoids the "memory access out of bounds" bug where
+// a JS-side bump allocator starting at address 0 overwrote Zig's ctx_pool.
 
 export const ZIG_CONST = {
   BLOCK_LEN: 16,
@@ -32,24 +29,15 @@ async function loadWasm(): Promise<void> {
   memory = exports.memory as WebAssembly.Memory;
 }
 
-/** Fresh view over current wasm memory (call after every potential grow). */
+/** Fresh view over current wasm memory. */
 function mem(): Uint8Array {
   return new Uint8Array((memory as WebAssembly.Memory).buffer);
 }
 
-let heapPtr = 0;
+/** Allocate n bytes inside Zig's scratch heap; returns a pointer (number). */
 function alloc(n: number): number {
-  const m = memory as WebAssembly.Memory;
-  const aligned = (heapPtr + 15) & ~15;
-  const needed = aligned + n;
-  if (m.buffer.byteLength < needed) {
-    const curPages = Math.floor(m.buffer.byteLength / 65536);
-    const wantPages = Math.ceil(needed / 65536);
-    m.grow(wantPages - curPages + 1);
-  }
-  heapPtr = aligned + n;
-  if (heapPtr > 32 * 1024 * 1024) heapPtr = 0; // reset occasionally
-  return aligned;
+  const ptr = Number((exports as any).zig_alloc(n));
+  return ptr;
 }
 
 function toNum(v: any): number {
@@ -68,6 +56,7 @@ export interface ZigCore {
   cbcDecryptOneshot(key: Uint8Array, iv: Uint8Array, input: Uint8Array): Uint8Array;
   sha256(input: Uint8Array): Uint8Array;
   hmacSha256(key: Uint8Array, msg: Uint8Array): Uint8Array;
+  passwordEmoji(derivedKey: Uint8Array): number;
 }
 
 export async function getZigCore(): Promise<ZigCore> {
@@ -166,6 +155,11 @@ export async function getZigCore(): Promise<ZigCore> {
       mem().set(msg, mp);
       e.zig_hmac_sha256(kp, key.length, mp, msg.length, op);
       return mem().slice(op, op + 32);
+    },
+    passwordEmoji(derivedKey) {
+      const kp = alloc(derivedKey.length);
+      mem().set(derivedKey, kp);
+      return toNum(e.zig_password_emoji(kp, derivedKey.length));
     },
   };
 }

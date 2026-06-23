@@ -1,11 +1,14 @@
-// Backend API client — relative path + ?XTransformPort=3001 (gateway routing).
-// On Vercel (static deploy), no backend is available; the app defaults to local
-// mode (Zig wasm) and backend calls silently fail (health check reports offline).
+// Backend API client — auto-detects environment:
+//   - Vercel deploy: calls same-origin /api/* (Vercel serverless edge functions)
+//   - Local dev: calls relative path + ?XTransformPort=3001 (gateway → Bun backend)
 import type { FileMeta } from "@crypto-core/src/format";
 import type { InspectResult } from "./worker";
 
-const PORT = 3001;
-const base = (p: string) => `${p}?XTransformPort=${PORT}`;
+// On Vercel, window.location.hostname is the deployed URL (not localhost).
+// In that case, API routes are same-origin (no XTransformPort needed).
+const IS_VERCEL = typeof window !== "undefined" && !["localhost", "127.0.0.1", "0.0.0.0"].includes(window.location.hostname);
+const LOCAL_PORT = 3001;
+const base = (p: string) => (IS_VERCEL ? p : `${p}?XTransformPort=${LOCAL_PORT}`);
 
 export const backendApi = {
   async health() {

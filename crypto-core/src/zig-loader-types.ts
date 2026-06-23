@@ -1,6 +1,6 @@
-// Shared ZigCore type — both the browser wasm loader and the native .so loader
-// implement this interface. ctx handles differ: wasm uses number (32-bit ptr),
-// native uses bigint (64-bit ptr). The format layer is generic over Ctx.
+// Shared ZigCore type — implemented by the browser wasm loader, the native .so
+// loader, AND the WebCrypto fallback (for Vercel serverless). All three produce
+// identical ENC1/ENT1 formats so files are cross-compatible across all runtimes.
 
 export type Ctx = number | bigint;
 
@@ -16,4 +16,5 @@ export interface ZigCore {
   cbcDecryptOneshot(key: Uint8Array, iv: Uint8Array, input: Uint8Array): Uint8Array;
   sha256(input: Uint8Array): Uint8Array;
   hmacSha256(key: Uint8Array, msg: Uint8Array): Uint8Array;
+  passwordEmoji(derivedKey: Uint8Array): number; // 0..95 index
 }

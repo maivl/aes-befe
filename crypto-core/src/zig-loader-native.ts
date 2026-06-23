@@ -11,7 +11,6 @@ const libPath = resolve(here, "../../backend/libcryptocore.so");
 const lib = dlopen(libPath, {
   zig_derive_key: { args: [FFIType.ptr, FFIType.u64, FFIType.ptr, FFIType.u64, FFIType.ptr], returns: FFIType.i32 },
   // ctx handle is a pointer but passed as a u64 integer (BigInt) — FFIType.u64
-  // accepts BigInt directly; FFIType.ptr expects a buffer/wrapped pointer.
   zig_cbc_encrypt_begin: { args: [FFIType.ptr, FFIType.ptr], returns: FFIType.u64 },
   zig_cbc_encrypt_update: { args: [FFIType.u64, FFIType.ptr, FFIType.u64, FFIType.ptr], returns: FFIType.u64 },
   zig_cbc_encrypt_final: { args: [FFIType.u64, FFIType.ptr], returns: FFIType.u64 },
@@ -22,6 +21,7 @@ const lib = dlopen(libPath, {
   zig_cbc_decrypt_oneshot: { args: [FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.u64, FFIType.ptr], returns: FFIType.i64 },
   zig_sha256: { args: [FFIType.ptr, FFIType.u64, FFIType.ptr], returns: FFIType.i32 },
   zig_hmac_sha256: { args: [FFIType.ptr, FFIType.u64, FFIType.ptr, FFIType.u64, FFIType.ptr], returns: FFIType.i32 },
+  zig_password_emoji: { args: [FFIType.ptr, FFIType.u64], returns: FFIType.u32 },
 });
 
 const e = lib.symbols as any;
@@ -113,6 +113,9 @@ export function getZigCore(): ZigCore {
       const out = new Uint8Array(32);
       e.zig_hmac_sha256(p(key), BigInt(key.length), p(msg), BigInt(msg.length), p(out));
       return out;
+    },
+    passwordEmoji(derivedKey) {
+      return n(e.zig_password_emoji(p(derivedKey), BigInt(derivedKey.length)));
     },
   };
 }

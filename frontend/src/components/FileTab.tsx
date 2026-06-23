@@ -218,7 +218,7 @@ export function FileTab() {
                 <div class="stat"><span class="stat-k">文件名</span><span class="stat-v">{decMeta()!.meta.originalName}</span></div>
                 <div class="stat"><span class="stat-k">大小</span><span class="stat-v">{formatBytes(decMeta()!.meta.originalSize)}</span></div>
                 <div class="stat"><span class="stat-k">类型</span><span class="stat-v">{decMeta()!.meta.mimeType}</span></div>
-                <div class="stat"><span class="stat-k">加密时间</span><span class="stat-v">{formatDate(decMeta()!.meta.encryptedAt)}</span></div>
+                <div class="stat"><span class="stat-k">密码指纹</span><span class="stat-v text-base">{decMeta()!.meta.passwordEmoji || "—"}</span></div>
               </div>
             </div>
             <Show when={decMeta()!.meta.note}>

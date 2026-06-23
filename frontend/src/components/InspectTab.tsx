@@ -75,10 +75,10 @@ export function InspectTab() {
               <div class="stat"><span class="stat-k">大小</span><span class="stat-v">{formatBytes(result()!.meta.originalSize)}</span></div>
               <div class="stat"><span class="stat-k">MIME</span><span class="stat-v">{result()!.meta.mimeType}</span></div>
               <div class="stat"><span class="stat-k">扩展名</span><span class="stat-v">{result()!.meta.extension || "—"}</span></div>
-              <div class="stat"><span class="stat-k">创建时间</span><span class="stat-v">{formatDate(result()!.meta.createdAt)}</span></div>
+              <div class="stat"><span class="stat-k">密码指纹</span><span class="stat-v text-base">{result()!.meta.passwordEmoji || "—"}</span></div>
               <div class="stat"><span class="stat-k">加密时间</span><span class="stat-v">{formatDate(result()!.meta.encryptedAt)}</span></div>
+              <div class="stat"><span class="stat-k">创建时间</span><span class="stat-v">{formatDate(result()!.meta.createdAt)}</span></div>
               <div class="stat"><span class="stat-k">数据偏移</span><span class="stat-v">{result()!.dataOffset} B</span></div>
-              <div class="stat"><span class="stat-k">含缩略图</span><span class="stat-v">{result()!.hasThumbnail ? "是" : "否"}</span></div>
             </div>
           </div>
 

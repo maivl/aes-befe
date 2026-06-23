@@ -51,6 +51,37 @@ fn free_ctx(c: *CbcCtx) void {
     if (idx < MAX_CTX) ctx_used[idx] = false;
 }
 
+// ---- JS scratch heap (managed by Zig, past all static data) ----
+// JS calls zig_alloc to get a pointer for input/output buffers. This avoids
+// collisions with Zig's static data (ctx_pool etc.) that caused "memory access
+// out of bounds" when the JS-side bump allocator started at address 0.
+const JS_HEAP_SIZE: usize = 4 * 1024 * 1024; // 4MB scratch (wasm .bss, no binary cost)
+var js_heap: [JS_HEAP_SIZE]u8 = undefined;
+var js_heap_off: usize = 0;
+
+export fn zig_alloc(n: usize) [*]u8 {
+    const aligned = (js_heap_off + 15) & ~@as(usize, 15);
+    if (aligned + n > JS_HEAP_SIZE) {
+        // wrap around (single-threaded, sequential calls)
+        js_heap_off = 0;
+        return @ptrCast(&js_heap[0]);
+    }
+    js_heap_off = aligned + n;
+    return @ptrCast(&js_heap[aligned]);
+}
+
+// Hash a password-derived key to an emoji index (0..95). One-way: uses the
+// PBKDF2-derived key (already 100k iterations) so precomputing a rainbow table
+// is expensive. Returns the emoji index, not the emoji itself (JS has the table).
+export fn zig_password_emoji(key_ptr: [*]const u8, key_len: usize) u32 {
+    var sum: u32 = 0;
+    var i: usize = 0;
+    while (i < key_len) : (i += 1) {
+        sum +%= key_ptr[i];
+    }
+    return sum % 96;
+}
+
 // ============ exported C-ABI functions ============
 
 export fn zig_derive_key(password_ptr: [*]const u8, password_len: usize, salt_ptr: [*]const u8, salt_len: usize, out_key: [*]u8) i32 {
