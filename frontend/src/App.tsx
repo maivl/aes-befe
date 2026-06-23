@@ -18,58 +18,105 @@ export default function App() {
   const [backendUp, setBackendUp] = createSignal<boolean | null>(null);
 
   onMount(async () => {
-    try { await backendApi.health(); setBackendUp(true); } catch { setBackendUp(false); }
+    try {
+      await backendApi.health();
+      setBackendUp(true);
+    } catch {
+      setBackendUp(false);
+    }
   });
 
   return (
-    <div class="min-h-screen flex flex-col">
+    <div class="min-h-screen flex flex-col bg-[var(--color-bg)]">
       <Toasts />
 
-      {/* Header — slim, single row */}
-      <header class="sticky top-0 z-40 border-b border-[var(--color-border)] bg-[var(--color-bg)]/90 backdrop-blur">
-        <div class="max-w-5xl mx-auto px-4 py-2.5 flex items-center justify-between gap-3">
-          <div class="flex items-center gap-2 min-w-0">
-            <div class="w-6 h-6 rounded bg-[var(--color-accent)] flex items-center justify-center text-black text-[11px] font-bold">Z</div>
-            <div class="min-w-0">
-              <div class="text-[13px] font-semibold text-[var(--color-fg)] truncate">加密核心 · Zig</div>
-              <div class="text-[10px] text-[var(--color-muted)] -mt-0.5 truncate">AES-256-CBC · Wasm + .so · 双端复用</div>
+      {/* Header — clean, minimal */}
+      <header class="sticky top-0 z-40 border-b border-[var(--color-border)] bg-[var(--color-bg)]/80 backdrop-blur-lg">
+        <div class="max-w-3xl mx-auto px-4 py-3 flex items-center justify-between gap-3">
+          <div class="flex items-center gap-2.5">
+            <div class="w-8 h-8 rounded-xl bg-[var(--color-accent)] flex items-center justify-center text-white text-sm font-bold">
+              Z
+            </div>
+            <div>
+              <div class="text-[15px] font-semibold text-[var(--color-fg)] leading-tight">加密核心</div>
+              <div class="text-[11px] text-[var(--color-muted)] leading-tight">AES-256-CBC · Zig Wasm + .so</div>
             </div>
           </div>
-          <div class="flex items-center gap-1 p-0.5 rounded-md bg-black/40 border border-[var(--color-border)]">
-            <button class={`px-2.5 py-1 rounded text-[12px] transition-colors ${mode() === "local" ? "bg-[var(--color-accent)] text-black font-medium" : "text-[var(--color-muted)] hover:text-[var(--color-fg)]"}`}
-              onClick={() => { setMode("local"); toast("info", "前端本地加密（隐私优先）"); }}>前端本地</button>
-            <button class={`px-2.5 py-1 rounded text-[12px] transition-colors ${mode() === "backend" ? "bg-[var(--color-accent)] text-black font-medium" : "text-[var(--color-muted)] hover:text-[var(--color-fg)]"}`}
-              onClick={() => { setMode("backend"); toast("info", "后端服务加密（可控优先）"); }}>后端服务</button>
+
+          {/* Mode toggle */}
+          <div class="flex items-center gap-0.5 p-0.5 rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)]">
+            <button
+              class={`px-3 py-1.5 rounded-lg text-[12px] font-medium transition-all ${
+                mode() === "local" ? "bg-[var(--color-accent)] text-white shadow-sm" : "text-[var(--color-muted)] hover:text-[var(--color-fg)]"
+              }`}
+              onClick={() => { setMode("local"); toast("info", "前端本地加密（隐私优先）"); }}
+            >
+              前端本地
+            </button>
+            <button
+              class={`px-3 py-1.5 rounded-lg text-[12px] font-medium transition-all ${
+                mode() === "backend" ? "bg-[var(--color-accent)] text-white shadow-sm" : "text-[var(--color-muted)] hover:text-[var(--color-fg)]"
+              }`}
+              onClick={() => { setMode("backend"); toast("info", "后端服务加密（可控优先）"); }}
+            >
+              后端服务
+            </button>
           </div>
         </div>
       </header>
 
-      <main class="flex-1 max-w-5xl w-full mx-auto px-4 py-4">
-        {/* Compact info strip */}
-        <div class="flex flex-wrap items-center gap-x-4 gap-y-1 mb-3 text-[11px] text-[var(--color-muted)]">
-          <span class="text-[var(--color-fg)] font-medium">一套 Zig 源码 → Wasm + 动态库</span>
-          <span>·</span><span>AES-256-CBC + PKCS7</span>
-          <span>·</span><span>PBKDF2-HMAC-SHA256（10万次）</span>
-          <span>·</span><span>流式分片 · 低内存</span>
-          <span>·</span>
-          <span>后端：<Show when={backendUp()} fallback={<Show when={backendUp() === false} fallback="检测中…"><span class="text-rose-400">离线</span></Show>}><span class="text-[var(--color-accent)]">在线</span></Show></span>
+      {/* Main */}
+      <main class="flex-1 max-w-3xl w-full mx-auto px-4 py-6">
+        {/* Hero */}
+        <div class="mb-6">
+          <h1 class="text-2xl font-bold text-[var(--color-fg)] tracking-tight">
+            一套 Zig 源码，双端流式加密
+          </h1>
+          <p class="text-[13px] text-[var(--color-muted)] mt-1.5 leading-relaxed">
+            统一 AES-256-CBC + PKCS7 + PBKDF2-HMAC-SHA256 加密核心，同时支持大文件流式加密与文本加密。
+            加密文件自带结构化元信息与内嵌缩略图，可免密预览。
+          </p>
+          <div class="flex flex-wrap items-center gap-2 mt-3">
+            <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-medium bg-[var(--color-surface-2)] text-[var(--color-fg-secondary)] border border-[var(--color-border)]">
+              AES-256-CBC
+            </span>
+            <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-medium bg-[var(--color-surface-2)] text-[var(--color-fg-secondary)] border border-[var(--color-border)]">
+              PBKDF2 10万次
+            </span>
+            <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-medium bg-[var(--color-surface-2)] text-[var(--color-fg-secondary)] border border-[var(--color-border)]">
+              免密缩略图预览
+            </span>
+            <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium bg-[var(--color-surface-2)] text-[var(--color-fg-secondary)] border border-[var(--color-border)]">
+              <span class={`w-1.5 h-1.5 rounded-full ${backendUp() ? "bg-[var(--color-success)]" : backendUp() === false ? "bg-[var(--color-danger)]" : "bg-[var(--color-muted-light)]"}`} />
+              后端{backendUp() ? "在线" : backendUp() === false ? "离线" : "检测中"}
+            </span>
+          </div>
         </div>
 
         {/* Tabs */}
-        <div class="flex items-center gap-1 mb-4">
+        <div class="flex items-center gap-1 mb-5 p-1 rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] w-full sm:w-auto sm:inline-flex">
           <For each={TABS}>
-            {(t) => <button class={`tab ${tab() === t.id ? "tab-active" : "tab-idle"}`} onClick={() => setTab(t.id)}>{t.label}</button>}
+            {(t) => (
+              <button
+                class={`tab flex-1 sm:flex-initial ${tab() === t.id ? "tab-active" : ""}`}
+                onClick={() => setTab(t.id)}
+              >
+                {t.label}
+              </button>
+            )}
           </For>
         </div>
 
+        {/* Tab content */}
         <Show when={tab() === "file"}><FileTab /></Show>
         <Show when={tab() === "text"}><TextTab /></Show>
         <Show when={tab() === "inspect"}><InspectTab /></Show>
       </main>
 
+      {/* Footer */}
       <footer class="mt-auto border-t border-[var(--color-border)]">
-        <div class="max-w-5xl mx-auto px-4 py-2.5 flex flex-col sm:flex-row items-center justify-between gap-1 text-[11px] text-[var(--color-muted)]">
-          <span>同一份 Zig 核心代码 · 前端 Wasm / 后端动态库 · 格式 100% 互通</span>
+        <div class="max-w-3xl mx-auto px-4 py-4 flex flex-col sm:flex-row items-center justify-between gap-1.5 text-[11px] text-[var(--color-muted)]">
+          <span>同一份 Zig 核心 · 前端 Wasm / 后端动态库 · 格式 100% 互通</span>
           <span class="font-mono">ENC1 / ENT1 · v1</span>
         </div>
       </footer>
