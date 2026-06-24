@@ -61,7 +61,7 @@ function call<T = any>(req: any, onProgress?: (p: Progress) => void): Promise<T>
 
 export const workerApi = {
   encryptFile: (file: File, password: string, meta: FileMeta, thumbnail: Uint8Array | undefined, onProgress?: (p: Progress) => void) =>
-    call<{ blob: Blob; size: number }>({ type: "encryptFile", file, password, meta, thumbnail }, onProgress),
+    call<{ blob?: Blob; size: number; opfsName?: string }>({ type: "encryptFile", file, password, meta, thumbnail }, onProgress),
   decryptFile: (file: File, password: string, onProgress?: (p: Progress) => void) =>
     call<{ url?: string; blob?: Blob; size: number; meta: FileMeta | null; thumbnailBase64?: string; opfsName?: string }>({ type: "decryptFile", file, password }, onProgress),
   inspectFile: (file: File) => call<InspectResult>({ type: "inspectFile", file }),

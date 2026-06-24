@@ -62,10 +62,19 @@ export function FileTab() {
       };
       if (mode() === "local") {
         const result = await workerApi.encryptFile(f, encPw(), meta, thumb()?.bytes, setProgress);
-        if (result.streamed) {
-          // File was already saved to disk via File System Access API
-          setResultSize(result.size);
-          toast("success", `加密完成 · 已保存到文件 (${formatBytes(result.size)})`);
+        if (result.opfsName) {
+          // OPFS: worker wrote encrypted file to OPFS, get URL for download
+          try {
+            const root = await (navigator as any).storage.getDirectory();
+            const handle = await root.getFileHandle(result.opfsName);
+            const file2 = await handle.getFile();
+            const blob = new Blob([file2], { type: "application/octet-stream" });
+            setResultBlob(blob); setResultSize(blob.size);
+            toast("success", `加密完成 · ${formatBytes(blob.size)}`);
+          } catch {
+            setResultSize(result.size);
+            toast("success", `加密完成 · ${formatBytes(result.size)}`);
+          }
         } else if (result.blob) {
           setResultBlob(result.blob); setResultSize(result.blob.size);
           toast("success", `加密完成 · ${formatBytes(result.blob.size)}`);

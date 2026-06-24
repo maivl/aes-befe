@@ -1,7 +1,8 @@
 // WebWorker: runs all crypto locally via Zig-compiled crypto.wasm (AES-256-GCM).
-// Key fix: Worker writes decrypted chunks DIRECTLY to OPFS (no postMessage for
-// chunks → no memory doubling → no iOS Safari OOM).
-// Worker has access to navigator.storage.getDirectory() — can create OPFS files.
+// Streams file data — NEVER loads the entire file into memory.
+// For decrypt: writes chunks directly to OPFS inside the worker (no postMessage
+// chunk transfer → no memory doubling → no iOS Safari OOM).
+// For encrypt: writes chunks directly to OPFS, main thread creates download URL.
 import { getZigCore } from "@crypto-core/src/zig-loader-web";
 import {
   encryptFileStream,
@@ -27,14 +28,37 @@ type Req =
 
 function post(msg: any) { (self as any).postMessage(msg); }
 
+/** Convert a ReadableStream to AsyncIterable. */
 function streamIter(stream: ReadableStream<Uint8Array>): AsyncIterable<Uint8Array> {
   const reader = stream.getReader();
   return { [Symbol.asyncIterator]() {
     return {
-      async next() { const r = await reader.read(); if (r.done) return { value: undefined, done: true as const }; return { value: r.value as Uint8Array, done: false as const }; },
+      async next() {
+        const r = await reader.read();
+        if (r.done) return { value: undefined, done: true as const };
+        return { value: r.value as Uint8Array, done: false as const };
+      },
       async return() { try { await reader.cancel(); } catch {} return { value: undefined, done: true as const }; },
     };
   }};
+}
+
+/** Check if OPFS is available (Worker context). */
+function isOPFSAvailable(): boolean {
+  return typeof (self as any).navigator?.storage?.getDirectory === "function";
+}
+
+/** Create an OPFS writable stream + file handle. Returns null if OPFS unavailable. */
+async function createOPFSWriter(filename: string) {
+  if (!isOPFSAvailable()) return null;
+  try {
+    const root = await (self as any).navigator.storage.getDirectory();
+    const safeName = filename.replace(/[^a-zA-Z0-9._-]/g, "_");
+    const handle = await root.getFileHandle(safeName, { create: true });
+    const writable = await handle.createWritable();
+    const writer = writable.getWriter();
+    return { writer, handle, root, name: safeName };
+  } catch { return null; }
 }
 
 async function handle(req: Req) {
@@ -45,130 +69,77 @@ async function handle(req: Req) {
     if (type === "encryptFile") {
       const { file, password, meta, thumbnail } = req;
       const stream = file.stream() as ReadableStream<Uint8Array>;
-      // For encrypt: collect chunks into Blob (encrypted .enc is downloaded by user)
-      const parts: Uint8Array[] = [];
+      // Try OPFS for encrypted output (avoids collecting all chunks in memory)
+      const opfs = await createOPFSWriter((file.name || "encrypted") + ".enc");
+      const blobParts: Uint8Array[] = [];
+      let totalSize = 0;
       for await (const chunk of encryptFileStream({
         core: c, meta, thumbnail, password: utf8Encode(password),
         plaintext: streamIter(stream),
         onProgress: (done, total) => post({ id, type: "progress", done, total, phase: "加密中" }),
       })) {
-        // Copy chunk (it's a view into wasm memory which gets reset on next call)
-        parts.push(new Uint8Array(chunk));
+        totalSize += chunk.length;
+        if (opfs) {
+          await opfs.writer.write(new Uint8Array(chunk));
+        } else {
+          blobParts.push(new Uint8Array(chunk));
+        }
       }
-      const blob = new Blob(parts, { type: "application/octet-stream" });
-      post({ id, type: "done", blob, size: blob.size });
+      if (opfs) {
+        await opfs.writer.close();
+        post({ id, type: "done", size: totalSize, opfsName: opfs.name });
+      } else {
+        const blob = new Blob(blobParts, { type: "application/octet-stream" });
+        post({ id, type: "done", blob, size: blob.size });
+      }
 
     } else if (type === "decryptFile") {
       const { file, password } = req;
-      // Stream the file — do NOT load via arrayBuffer()
+      // Pass file.stream() DIRECTLY to decryptFileStream — it uses ByteReader
+      // which streams the header efficiently (only buffers what it needs).
+      // Do NOT pre-parse the header here — that was causing "Not ENC1" because
+      // decryptFileStream also parses the header and got ciphertext instead.
       const stream = file.stream() as ReadableStream<Uint8Array>;
-      const reader = stream.getReader();
-
-      // --- Parse header by reading just enough bytes ---
-      let buf = new Uint8Array(0);
-      const readMore = async (need: number) => {
-        while (buf.length < need) {
-          const r = await reader.read();
-          if (r.done) break;
-          const merged = new Uint8Array(buf.length + r.value.length);
-          merged.set(buf, 0); merged.set(r.value, buf.length);
-          buf = merged;
-        }
-      };
-      await readMore(12);
-      if (utf8Decode(buf.subarray(0, 4)) !== "ENC1") throw new Error("Not ENC1");
-      if (buf[4] !== 2) throw new Error("Unsupported version");
-      const jl = (buf[8] | (buf[9] << 8) | (buf[10] << 16) | (buf[11] << 24)) >>> 0;
-      await readMore(12 + jl + 4);
-      const tl = (buf[12 + jl] | (buf[13 + jl] << 8) | (buf[14 + jl] << 16) | (buf[15 + jl] << 24)) >>> 0;
-      const fullHeader = 12 + jl + 4 + tl + 16 + 12 + 4;
-      await readMore(fullHeader);
-
-      const meta: FileMeta = JSON.parse(utf8Decode(buf.subarray(12, 12 + jl)));
-      let thumbnailBase64: string | undefined;
-      if (tl > 0) {
-        const thumb = buf.subarray(12 + jl + 4, 12 + jl + 4 + tl);
-        thumbnailBase64 = bytesToBase64(thumb);
-      }
-
-      // --- Set up OPFS for direct write (Worker can access OPFS!) ---
-      // This is the key fix: write decrypted chunks to OPFS inside the worker,
-      // avoiding postMessage chunk transfer (which doubles memory on iOS Safari).
-      const opfsAvailable = typeof (self as any).navigator?.storage?.getDirectory === "function";
-      let opfsRoot: any = null, opfsFileHandle: any = null, opfsWriter: any = null;
+      const opfs = await createOPFSWriter("decrypted_" + (file.name || "file"));
       const blobParts: Uint8Array[] = [];
       let totalSize = 0;
+      let resultMeta: FileMeta | null = null;
+      let resultThumb: string | undefined;
 
-      if (opfsAvailable) {
-        try {
-          opfsRoot = await (self as any).navigator.storage.getDirectory();
-          const safeName = (meta.originalName || "decrypted").replace(/[^a-zA-Z0-9._-]/g, "_");
-          opfsFileHandle = await opfsRoot.getFileHandle(safeName, { create: true });
-          const writable = await opfsFileHandle.createWritable();
-          opfsWriter = writable.getWriter();
-        } catch { opfsWriter = null; }
-      }
-
-      // --- Combined ciphertext iterable ---
-      const remaining = buf.subarray(fullHeader);
-      const ciphertextIter: AsyncIterable<Uint8Array> = {
-        [Symbol.asyncIterator]() {
-          let sentRemaining = false;
-          return {
-            async next() {
-              if (!sentRemaining) {
-                sentRemaining = true;
-                if (remaining.length > 0) return { value: remaining, done: false as const };
-              }
-              const r = await reader.read();
-              if (r.done) return { value: undefined, done: true as const };
-              return { value: r.value as Uint8Array, done: false as const };
-            },
-          };
-        },
-      };
-
-      post({ id, type: "progress", done: 0, total: meta.originalSize, phase: "解密中" });
-
-      // --- Decrypt chunk by chunk, write directly to OPFS (no postMessage!) ---
-      try {
-        for await (const chunk of decryptFileStream({
-          core: c, password: utf8Encode(password), ciphertext: ciphertextIter,
-          onProgress: (done, total) => post({ id, type: "progress", done, total, phase: "解密中" }),
-        })) {
-          totalSize += chunk.length;
-          if (opfsWriter) {
-            // Write directly to OPFS — chunk stays in wasm heap, no copy needed
-            await opfsWriter.write(new Uint8Array(chunk));
-          } else {
-            // Fallback: collect in memory (for browsers without OPFS)
-            blobParts.push(new Uint8Array(chunk));
-          }
+      for await (const chunk of decryptFileStream({
+        core: c, password: utf8Encode(password), ciphertext: streamIter(stream),
+        onProgress: (done, total) => post({ id, type: "progress", done, total, phase: "解密中" }),
+      })) {
+        totalSize += chunk.length;
+        if (opfs) {
+          await opfs.writer.write(new Uint8Array(chunk));
+        } else {
+          blobParts.push(new Uint8Array(chunk));
         }
-      } catch (e) {
-        if (opfsWriter) { try { await opfsWriter.abort(); } catch {} }
-        throw e;
       }
 
-      // --- Finalize ---
-      if (opfsWriter) {
-        await opfsWriter.close();
-        // Don't create URL in worker — worker URLs aren't accessible from main thread.
-        // Just send the OPFS filename; main thread opens the file and creates URL.
-        post({ id, type: "done", size: totalSize, meta, thumbnailBase64, opfsName: opfsFileHandle.name });
+      // Extract meta from decryptFileStream's closure (set at end of generator)
+      resultMeta = (decryptFileStream as any).__meta || null;
+      resultThumb = (decryptFileStream as any).__thumb ? bytesToBase64((decryptFileStream as any).__thumb) : undefined;
+
+      if (opfs) {
+        await opfs.writer.close();
+        post({ id, type: "done", size: totalSize, meta: resultMeta, thumbnailBase64: resultThumb, opfsName: opfs.name });
       } else {
-        // Blob fallback — transfer the blob to main thread
-        const blob = new Blob(blobParts, { type: meta.mimeType || "application/octet-stream" });
-        post({ id, type: "done", blob, size: blob.size, meta, thumbnailBase64 });
+        const mime = resultMeta?.mimeType || "application/octet-stream";
+        const blob = new Blob(blobParts, { type: mime });
+        post({ id, type: "done", blob, size: blob.size, meta: resultMeta, thumbnailBase64: resultThumb });
       }
 
     } else if (type === "inspectFile") {
       const stream = req.file.stream() as ReadableStream<Uint8Array>;
       const insp = await inspectFileStream(streamIter(stream));
       post({ id, type: "done", meta: insp.meta, hasThumbnail: !!insp.thumbnail && insp.thumbnail.length > 0, thumbnailBase64: insp.thumbnail && insp.thumbnail.length ? bytesToBase64(insp.thumbnail) : undefined, dataOffset: insp.dataOffset });
+
     } else if (type === "encryptText") {
       const data = await encryptTextToBase64(c, req.text, utf8Encode(req.password), req.note || "");
       post({ id, type: "done", data });
+
     } else if (type === "decryptText") {
       const { text, meta } = await decryptTextFromBase64(c, req.base64, utf8Encode(req.password));
       post({ id, type: "done", text, meta });
