@@ -1,10 +1,11 @@
-import { createSignal, Show, createMemo } from "solid-js";
+import { createSignal, Show, createMemo, onCleanup } from "solid-js";
 import type { FileMeta } from "@crypto-core/src/format";
 import { mode, toast } from "../store";
 import { workerApi, enableFilePicker, type Progress, type InspectResult } from "../lib/worker";
 import { backendApi } from "../lib/api";
 import { generateThumbnail, type ThumbResult } from "../lib/thumbnail";
 import { formatBytes, formatDate, downloadBlob, guessMime, getExtension } from "../lib/format";
+import { blobToOPFS, isOPFSSupported } from "../lib/opfs";
 import { ProgressBar, Empty } from "./ui";
 import { FileDrop } from "./FileDrop";
 import { PasswordEmojiPreview } from "./PasswordEmojiPreview";
@@ -28,6 +29,10 @@ export function FileTab() {
   const [decProgress, setDecProgress] = createSignal<Progress | null>(null);
   const [decBlob, setDecBlob] = createSignal<Blob | null>(null);
   const [decPreviewUrl, setDecPreviewUrl] = createSignal<string | null>(null);
+  let previewCleanup: (() => Promise<void>) | null = null;
+
+  // Clean up OPFS file / Blob URL when component unmounts
+  onCleanup(() => { previewCleanup?.(); });
 
   async function pickEnc(files: File[]) {
     const f = files[0]; setEncFile(f); setResultBlob(null); setThumb(null); setCustomThumbFile(null);
@@ -86,34 +91,38 @@ export function FileTab() {
   async function doDec() {
     const f = decFile(); if (!f) return toast("error", "请选择加密文件");
     if (!decPw()) return toast("error", "请输入密码");
-    enableFilePicker(); // enable in click handler (user gesture)
+    enableFilePicker();
     setDecBusy(true); setDecBlob(null); setDecPreviewUrl(null);
+    // Clean up previous preview
+    if (previewCleanup) { await previewCleanup(); previewCleanup = null; }
     setDecProgress({ done: 0, total: f.size, phase: "解密中" });
     try {
+      let blob: Blob | null = null;
+      let mime = "";
       if (mode() === "local") {
         const result = await workerApi.decryptFile(f, decPw(), setDecProgress);
         if (result.streamed) {
-          setDecBlob(null);
           toast("success", `解密完成 · 已保存到文件 (${formatBytes(result.size)})`);
-        } else if (result.blob) {
-          setDecBlob(result.blob);
-          // Create preview URL for images/videos
-          const mime = result.meta?.mimeType || "";
-          if (/^image\/|^video\//.test(mime)) {
-            const url = URL.createObjectURL(result.blob);
-            setDecPreviewUrl(url);
-          }
-          toast("success", `解密完成 · ${formatBytes(result.blob.size)}`);
+          setDecBusy(false); setDecProgress(null);
+          return;
         }
+        blob = result.blob;
+        mime = result.meta?.mimeType || "";
       } else {
-        const blob = await backendApi.decryptFile(f, decPw());
-        setDecBlob(blob);
-        const mime = decMeta()?.meta.mimeType || "";
-        if (/^image\/|^video\//.test(mime)) {
-          const url = URL.createObjectURL(blob);
-          setDecPreviewUrl(url);
-        }
-        toast("success", `解密完成 · ${formatBytes(blob.size)}`);
+        blob = await backendApi.decryptFile(f, decPw());
+        mime = decMeta()?.meta.mimeType || "";
+      }
+      setDecBlob(blob);
+      toast("success", `解密完成 · ${formatBytes(blob.size)}`);
+      // Create preview for images/videos using OPFS (avoids holding blob in memory)
+      if (blob && /^image\/|^video\//.test(mime)) {
+        const filename = decMeta()?.meta.originalName || `decrypted.${mime.split("/")[1] || "bin"}`;
+        const { url, cleanup } = await blobToOPFS(filename, blob);
+        setDecPreviewUrl(url);
+        previewCleanup = cleanup;
+        // Free the blob from memory — OPFS file is the source now
+        if (isOPFSSupported()) setDecBlob(null);
+        toast("info", mime.startsWith("video/") ? "视频预览已加载（OPFS）" : "图片预览已加载");
       }
     } catch (e: any) {
       if (e?.name === "AbortError") { toast("info", "已取消保存"); setDecBusy(false); setDecProgress(null); return; }
@@ -240,12 +249,15 @@ export function FileTab() {
             </div>
             <Show when={decPreviewUrl()}>
               <div class="rounded-xl border border-[var(--color-border)] overflow-hidden bg-[var(--color-surface)]">
-                <div class="px-3 py-2 text-[12px] font-medium text-[var(--color-fg)] border-b border-[var(--color-border)]">解密预览</div>
+                <div class="flex items-center justify-between px-3 py-2 border-b border-[var(--color-border)]">
+                  <span class="text-[12px] font-medium text-[var(--color-fg)]">解密预览</span>
+                  <a href={decPreviewUrl()!} download={decMeta()?.meta.originalName || "decrypted"} class="text-[11px] text-[var(--color-accent)] hover:underline">下载</a>
+                </div>
                 <Show when={decMeta()?.meta.mimeType?.startsWith("image/")}>
-                  <img src={decPreviewUrl()!} class="w-full max-h-96 object-contain" alt="解密预览" />
+                  <img src={decPreviewUrl()!} class="w-full max-h-[60vh] object-contain" alt="解密预览" />
                 </Show>
                 <Show when={decMeta()?.meta.mimeType?.startsWith("video/")}>
-                  <video src={decPreviewUrl()!} class="w-full max-h-96" controls playsinline />
+                  <video src={decPreviewUrl()!} class="w-full max-h-[60vh]" controls playsinline preload="auto" />
                 </Show>
               </div>
             </Show>
