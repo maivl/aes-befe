@@ -5,7 +5,7 @@ import { workerApi, enableFilePicker, type Progress, type InspectResult } from "
 import { backendApi } from "../lib/api";
 import { generateThumbnail, type ThumbResult } from "../lib/thumbnail";
 import { formatBytes, formatDate, downloadBlob, guessMime, getExtension } from "../lib/format";
-import { blobToOPFS, isOPFSSupported } from "../lib/opfs";
+import { isOPFSSupported } from "../lib/opfs";
 import { ProgressBar, Empty } from "./ui";
 import { FileDrop } from "./FileDrop";
 import { PasswordEmojiPreview } from "./PasswordEmojiPreview";
@@ -93,36 +93,43 @@ export function FileTab() {
     if (!decPw()) return toast("error", "请输入密码");
     enableFilePicker();
     setDecBusy(true); setDecBlob(null); setDecPreviewUrl(null);
-    // Clean up previous preview
-    if (previewCleanup) { await previewCleanup(); previewCleanup = null; }
+    if (previewCleanup) { try { await previewCleanup(); } catch {} previewCleanup = null; }
     setDecProgress({ done: 0, total: f.size, phase: "解密中" });
     try {
-      let blob: Blob | null = null;
       let mime = "";
       if (mode() === "local") {
         const result = await workerApi.decryptFile(f, decPw(), setDecProgress);
-        if (result.streamed) {
+        mime = result.meta?.mimeType || decMeta()?.meta.mimeType || "";
+        if (result.url) {
+          // OPFS streaming — URL already created, blob freed from memory
+          setDecPreviewUrl(result.url);
+          previewCleanup = async () => { URL.revokeObjectURL(result.url!); };
+          toast("success", `解密完成 · ${formatBytes(result.size)}`);
+          if (/^image\/|^video\//.test(mime)) {
+            toast("info", mime.startsWith("video/") ? "视频预览已加载" : "图片预览已加载");
+          }
+        } else if (result.blob) {
+          setDecBlob(result.blob);
+          toast("success", `解密完成 · ${formatBytes(result.blob.size)}`);
+          // For images/videos without OPFS, create Blob URL
+          if (/^image\/|^video\//.test(mime)) {
+            const url = URL.createObjectURL(result.blob);
+            setDecPreviewUrl(url);
+            previewCleanup = async () => URL.revokeObjectURL(url);
+          }
+        } else if (result.streamed) {
           toast("success", `解密完成 · 已保存到文件 (${formatBytes(result.size)})`);
-          setDecBusy(false); setDecProgress(null);
-          return;
         }
-        blob = result.blob;
-        mime = result.meta?.mimeType || "";
       } else {
-        blob = await backendApi.decryptFile(f, decPw());
+        const blob = await backendApi.decryptFile(f, decPw());
         mime = decMeta()?.meta.mimeType || "";
-      }
-      setDecBlob(blob);
-      toast("success", `解密完成 · ${formatBytes(blob.size)}`);
-      // Create preview for images/videos using OPFS (avoids holding blob in memory)
-      if (blob && /^image\/|^video\//.test(mime)) {
-        const filename = decMeta()?.meta.originalName || `decrypted.${mime.split("/")[1] || "bin"}`;
-        const { url, cleanup } = await blobToOPFS(filename, blob);
-        setDecPreviewUrl(url);
-        previewCleanup = cleanup;
-        // Free the blob from memory — OPFS file is the source now
-        if (isOPFSSupported()) setDecBlob(null);
-        toast("info", mime.startsWith("video/") ? "视频预览已加载（OPFS）" : "图片预览已加载");
+        setDecBlob(blob);
+        toast("success", `解密完成 · ${formatBytes(blob.size)}`);
+        if (/^image\/|^video\//.test(mime)) {
+          const url = URL.createObjectURL(blob);
+          setDecPreviewUrl(url);
+          previewCleanup = async () => URL.revokeObjectURL(url);
+        }
       }
     } catch (e: any) {
       if (e?.name === "AbortError") { toast("info", "已取消保存"); setDecBusy(false); setDecProgress(null); return; }
