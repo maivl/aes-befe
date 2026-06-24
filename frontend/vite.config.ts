@@ -15,13 +15,13 @@ export default defineConfig({
   server: {
     port: 3000,
     host: "0.0.0.0",
-    // Allow all hosts so the app works behind any reverse proxy / gateway
-    // (Caddy, Vercel preview, cloud function URLs, etc.)
     allowedHosts: true,
+    // Completely disable HMR — the app runs behind a gateway/proxy that breaks
+    // the HMR websocket and causes Vite to crash.
     hmr: false,
+    ws: false,
     fs: { allow: [path.resolve(__dirname, "..")] },
   },
-  // SPA: always fall back to index.html so client-side routing works on Vercel.
   preview: {
     port: 3000,
     host: "0.0.0.0",

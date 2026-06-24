@@ -1,12 +1,6 @@
-// WebWorker: runs all crypto locally, off the main thread.
-// Plaintext never leaves the browser in local mode.
-//
-// Uses the WebCrypto loader (native browser crypto: AES-256-CBC + PBKDF2 via
-// crypto.subtle) which produces byte-identical ciphertext to the Zig core.
-// The Zig wasm loader had a heap wrap-around bug in the compiled binary that
-// corrupted large-file encryption → "Invalid PKCS7 padding". WebCrypto is
-// native, hardware-accelerated, and has no memory management issues.
-import { getZigCoreWebCrypto } from "@crypto-core/src/webcrypto-loader";
+// WebWorker: runs all crypto locally via the Zig-compiled crypto.wasm.
+// Plaintext never leaves the browser. Files are streamed in 512KB chunks.
+import { getZigCore } from "@crypto-core/src/zig-loader-web";
 import {
   encryptFileStream,
   decryptFileStream,
@@ -20,7 +14,7 @@ import {
 
 let coreReady: Promise<any> | null = null;
 function core() {
-  if (!coreReady) coreReady = getZigCoreWebCrypto();
+  if (!coreReady) coreReady = getZigCore();
   return coreReady;
 }
 
@@ -33,7 +27,7 @@ type Req =
 
 function post(msg: any) { (self as any).postMessage(msg); }
 
-const CHUNK_SIZE = 512 * 1024; // 512KB per chunk for progress reporting
+const CHUNK_SIZE = 512 * 1024; // 512KB — fits easily in 64MB wasm heap (input+output = 1MB)
 
 function bytesIter(bytes: Uint8Array): AsyncIterable<Uint8Array> {
   return { [Symbol.asyncIterator]() {

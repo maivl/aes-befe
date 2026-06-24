@@ -1,8 +1,7 @@
 #!/bin/bash
 # Starts Vite (port 3000) + Bun backend (port 3001), fully detached with
-# auto-restart watchdogs. Both survive across shell sessions.
+# auto-restart watchdogs.
 
-# Kill any existing instances
 pkill -f "vite --port 3000" 2>/dev/null || true
 pkill -f "backend/src/index.ts" 2>/dev/null || true
 sleep 1
@@ -29,7 +28,7 @@ done
 ' > /dev/null 2>&1 &
 echo "Vite watchdog started (PID $!)"
 
-# Wait for both to be ready
+# Wait for both
 for i in $(seq 1 30); do
   v=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3000/ 2>/dev/null)
   b=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3001/api/health 2>/dev/null)
