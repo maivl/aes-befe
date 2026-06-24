@@ -1,7 +1,7 @@
 import { createSignal, Show, createMemo } from "solid-js";
 import type { FileMeta } from "@crypto-core/src/format";
 import { mode, toast } from "../store";
-import { workerApi, type Progress, type InspectResult } from "../lib/worker";
+import { workerApi, enableFilePicker, type Progress, type InspectResult } from "../lib/worker";
 import { backendApi } from "../lib/api";
 import { generateThumbnail, type ThumbResult } from "../lib/thumbnail";
 import { formatBytes, formatDate, downloadBlob, guessMime, getExtension } from "../lib/format";
@@ -27,6 +27,7 @@ export function FileTab() {
   const [decBusy, setDecBusy] = createSignal(false);
   const [decProgress, setDecProgress] = createSignal<Progress | null>(null);
   const [decBlob, setDecBlob] = createSignal<Blob | null>(null);
+  const [decPreviewUrl, setDecPreviewUrl] = createSignal<string | null>(null);
 
   async function pickEnc(files: File[]) {
     const f = files[0]; setEncFile(f); setResultBlob(null); setThumb(null); setCustomThumbFile(null);
@@ -46,6 +47,7 @@ export function FileTab() {
   async function doEnc() {
     const f = encFile(); if (!f) return toast("error", "请先选择文件");
     if (!encPw()) return toast("error", "请输入密码");
+    enableFilePicker(); // enable in click handler (user gesture)
     setBusy(true); setProgress({ done: 0, total: f.size, phase: "准备中" }); setResultBlob(null);
     try {
       const meta: FileMeta = {
@@ -84,7 +86,8 @@ export function FileTab() {
   async function doDec() {
     const f = decFile(); if (!f) return toast("error", "请选择加密文件");
     if (!decPw()) return toast("error", "请输入密码");
-    setDecBusy(true); setDecBlob(null);
+    enableFilePicker(); // enable in click handler (user gesture)
+    setDecBusy(true); setDecBlob(null); setDecPreviewUrl(null);
     setDecProgress({ done: 0, total: f.size, phase: "解密中" });
     try {
       if (mode() === "local") {
@@ -94,11 +97,22 @@ export function FileTab() {
           toast("success", `解密完成 · 已保存到文件 (${formatBytes(result.size)})`);
         } else if (result.blob) {
           setDecBlob(result.blob);
+          // Create preview URL for images/videos
+          const mime = result.meta?.mimeType || "";
+          if (/^image\/|^video\//.test(mime)) {
+            const url = URL.createObjectURL(result.blob);
+            setDecPreviewUrl(url);
+          }
           toast("success", `解密完成 · ${formatBytes(result.blob.size)}`);
         }
       } else {
         const blob = await backendApi.decryptFile(f, decPw());
         setDecBlob(blob);
+        const mime = decMeta()?.meta.mimeType || "";
+        if (/^image\/|^video\//.test(mime)) {
+          const url = URL.createObjectURL(blob);
+          setDecPreviewUrl(url);
+        }
         toast("success", `解密完成 · ${formatBytes(blob.size)}`);
       }
     } catch (e: any) {
@@ -224,6 +238,17 @@ export function FileTab() {
               <button class="btn btn-primary flex-1" disabled={decBusy()} onClick={doDec}>{decBusy() ? "解密中…" : "解密文件"}</button>
               <Show when={decBlob()}><button class="btn btn-ghost" onClick={() => downloadBlob(decBlob()!, decMeta()?.meta.originalName || "decrypted")}>下载原文件</button></Show>
             </div>
+            <Show when={decPreviewUrl()}>
+              <div class="rounded-xl border border-[var(--color-border)] overflow-hidden bg-[var(--color-surface)]">
+                <div class="px-3 py-2 text-[12px] font-medium text-[var(--color-fg)] border-b border-[var(--color-border)]">解密预览</div>
+                <Show when={decMeta()?.meta.mimeType?.startsWith("image/")}>
+                  <img src={decPreviewUrl()!} class="w-full max-h-96 object-contain" alt="解密预览" />
+                </Show>
+                <Show when={decMeta()?.meta.mimeType?.startsWith("video/")}>
+                  <video src={decPreviewUrl()!} class="w-full max-h-96" controls playsinline />
+                </Show>
+              </div>
+            </Show>
             <div class="text-[11px] text-[var(--color-muted)]">{modeLabel()}</div>
           </div>
         </Show>

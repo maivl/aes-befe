@@ -3,7 +3,9 @@
   "buildCommand": "cd frontend && bun install && bun run build",
   "outputDirectory": "frontend/dist",
   "installCommand": "cd frontend && bun install",
-  "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }],
+  "rewrites": [
+    { "source": "/((?!api/).*)", "destination": "/index.html" }
+  ],
   "headers": [
     { "source": "/crypto.wasm", "headers": [
       { "key": "Content-Type", "value": "application/wasm" },
