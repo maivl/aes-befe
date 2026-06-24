@@ -1,16 +1,12 @@
-// zig-loader browser — loads crypto.wasm (compiled from the unified Zig source)
-// and exposes a typed JS API. Runs inside the WebWorker.
-//
-// Memory management: zig_alloc manages a 64MB scratch heap inside Zig's static
-// data. Before EACH operation we call zig_reset_heap() to reclaim all scratch
-// space (single-threaded, sequential — no live buffers span calls). If
-// zig_alloc returns 0 (heap exhausted), we throw immediately. The worker feeds
-// large files in 512KB chunks so the heap never fills up.
+// zig-loader-web.ts — loads crypto.wasm (Zig-compiled AES-256-GCM core).
+// GCM is AEAD — no padding, no "Invalid PKCS7" errors. Authentication tag is
+// appended to ciphertext automatically by Zig.
 
 export const ZIG_CONST = {
   BLOCK_LEN: 16,
   KEY_LEN: 32,
-  IV_LEN: 16,
+  NONCE_LEN: 12,
+  TAG_LEN: 16,
   SALT_LEN: 16,
   PBKDF2_ITERS: 100_000,
 } as const;
@@ -21,48 +17,31 @@ let exports: any = null;
 
 async function loadWasm(): Promise<void> {
   if (wasm) return;
-  const res = await fetch("/crypto.wasm?v=6");
+  const res = await fetch("/crypto.wasm?v=7");
   const bytes = new Uint8Array(await res.arrayBuffer());
   const mod = await WebAssembly.compile(bytes);
   const inst = await WebAssembly.instantiate(mod, {});
   wasm = inst;
   exports = inst.exports;
   memory = exports.memory as WebAssembly.Memory;
-  if (typeof (exports as any).zig_alloc !== "function") {
-    throw new Error("crypto.wasm missing zig_alloc — clear cache and reload");
+  if (typeof (exports as any).zig_gcm_encrypt !== "function") {
+    throw new Error("crypto.wasm missing zig_gcm_encrypt — clear cache");
   }
 }
 
-function mem(): Uint8Array {
-  return new Uint8Array((memory as WebAssembly.Memory).buffer);
-}
-
-function resetHeap(): void {
-  if (typeof (exports as any).zig_reset_heap === "function") {
-    (exports as any).zig_reset_heap();
-  }
-}
-
+function mem(): Uint8Array { return new Uint8Array((memory as WebAssembly.Memory).buffer); }
+function resetHeap(): void { if (typeof (exports as any).zig_reset_heap === "function") (exports as any).zig_reset_heap(); }
 function alloc(n: number): number {
   const ptr = Number((exports as any).zig_alloc(n));
-  if (!ptr) throw new Error("wasm heap exhausted — chunk too large");
+  if (!ptr) throw new Error("wasm heap exhausted");
   return ptr;
 }
-
-function toNum(v: any): number {
-  return typeof v === "bigint" ? Number(v) : v;
-}
+function N(v: any): number { return typeof v === "bigint" ? Number(v) : v; }
 
 export interface ZigCore {
   deriveKey(password: Uint8Array, salt: Uint8Array): Uint8Array;
-  cbcEncryptBegin(key: Uint8Array, iv: Uint8Array): number;
-  cbcEncryptUpdate(ctx: number, input: Uint8Array): Uint8Array;
-  cbcEncryptFinal(ctx: number): Uint8Array;
-  cbcDecryptBegin(key: Uint8Array, iv: Uint8Array): number;
-  cbcDecryptUpdate(ctx: number, input: Uint8Array): Uint8Array;
-  cbcDecryptFinal(ctx: number): Uint8Array;
-  cbcEncryptOneshot(key: Uint8Array, iv: Uint8Array, input: Uint8Array): Uint8Array;
-  cbcDecryptOneshot(key: Uint8Array, iv: Uint8Array, input: Uint8Array): Uint8Array;
+  gcmEncrypt(key: Uint8Array, nonce: Uint8Array, plaintext: Uint8Array): Uint8Array; // ciphertext+tag
+  gcmDecrypt(key: Uint8Array, nonce: Uint8Array, ciphertextAndTag: Uint8Array): Uint8Array; // plaintext or throw
   sha256(input: Uint8Array): Uint8Array;
   hmacSha256(key: Uint8Array, msg: Uint8Array): Uint8Array;
 }
@@ -82,81 +61,31 @@ export async function getZigCore(): Promise<ZigCore> {
       if (r !== 0) throw new Error("derive_key failed: " + r);
       return mem().slice(op, op + ZIG_CONST.KEY_LEN);
     },
-    cbcEncryptBegin(key, iv) {
-      // deriveKey already reset heap; key buffer is still valid here.
-      const kp = alloc(key.length);
-      const ip = alloc(iv.length);
-      mem().set(key, kp);
-      mem().set(iv, ip);
-      const ctx = toNum(e.zig_cbc_encrypt_begin(kp, ip));
-      if (!ctx) throw new Error("encrypt_begin: no ctx slot");
-      return ctx;
-    },
-    cbcEncryptUpdate(ctx, input) {
-      // Reset heap — the ctx lives in Zig's static data (not the heap), so it
-      // survives. This ensures input+output buffers never collide with stale
-      // data from previous update calls.
+    gcmEncrypt(key, nonce, plaintext) {
       resetHeap();
-      const ip = alloc(input.length);
-      const op = alloc(Math.max(16, Math.floor(input.length / 16) * 16));
-      mem().set(input, ip);
-      const n = toNum(e.zig_cbc_encrypt_update(ctx, ip, input.length, op));
-      return mem().slice(op, op + n);
-    },
-    cbcEncryptFinal(ctx) {
-      resetHeap();
-      const op = alloc(16);
-      const n = toNum(e.zig_cbc_encrypt_final(ctx, op));
-      return mem().slice(op, op + n);
-    },
-    cbcDecryptBegin(key, iv) {
-      const kp = alloc(key.length);
-      const ip = alloc(iv.length);
-      mem().set(key, kp);
-      mem().set(iv, ip);
-      const ctx = toNum(e.zig_cbc_decrypt_begin(kp, ip));
-      if (!ctx) throw new Error("decrypt_begin: no ctx slot");
-      return ctx;
-    },
-    cbcDecryptUpdate(ctx, input) {
-      resetHeap();
-      const ip = alloc(input.length);
-      const op = alloc(Math.max(16, Math.floor(input.length / 16) * 16));
-      mem().set(input, ip);
-      const n = toNum(e.zig_cbc_decrypt_update(ctx, ip, input.length, op));
-      return mem().slice(op, op + n);
-    },
-    cbcDecryptFinal(ctx) {
-      resetHeap();
-      const op = alloc(16);
-      const n = toNum(e.zig_cbc_decrypt_final(ctx, op));
-      if (n < 0) throw new Error("Invalid PKCS7 padding");
-      return mem().slice(op, op + n);
-    },
-    cbcEncryptOneshot(key, iv, input) {
-      resetHeap();
-      const kp = alloc(key.length);
-      const ip2 = alloc(iv.length);
-      const inp = alloc(input.length);
-      const outLen = input.length + (ZIG_CONST.BLOCK_LEN - (input.length % ZIG_CONST.BLOCK_LEN));
+      const kp = alloc(ZIG_CONST.KEY_LEN);
+      const np = alloc(ZIG_CONST.NONCE_LEN);
+      const inp = alloc(plaintext.length);
+      const outLen = plaintext.length + ZIG_CONST.TAG_LEN;
       const op = alloc(outLen);
       mem().set(key, kp);
-      mem().set(iv, ip2);
-      mem().set(input, inp);
-      const n = toNum(e.zig_cbc_encrypt_oneshot(kp, ip2, inp, input.length, op));
+      mem().set(nonce, np);
+      mem().set(plaintext, inp);
+      const n = N(e.zig_gcm_encrypt(kp, np, inp, plaintext.length, op));
+      if (n === 0) throw new Error("gcm_encrypt failed");
       return mem().slice(op, op + n);
     },
-    cbcDecryptOneshot(key, iv, input) {
+    gcmDecrypt(key, nonce, ciphertextAndTag) {
       resetHeap();
-      const kp = alloc(key.length);
-      const ip2 = alloc(iv.length);
-      const inp = alloc(input.length);
-      const op = alloc(input.length);
+      const kp = alloc(ZIG_CONST.KEY_LEN);
+      const np = alloc(ZIG_CONST.NONCE_LEN);
+      const inp = alloc(ciphertextAndTag.length);
+      const op = alloc(ciphertextAndTag.length); // max plaintext = ct len
       mem().set(key, kp);
-      mem().set(iv, ip2);
-      mem().set(input, inp);
-      const n = toNum(e.zig_cbc_decrypt_oneshot(kp, ip2, inp, input.length, op));
-      if (n < 0) throw new Error("Invalid PKCS7 padding");
+      mem().set(nonce, np);
+      mem().set(ciphertextAndTag, inp);
+      const n = N(e.zig_gcm_decrypt(kp, np, inp, ciphertextAndTag.length, op));
+      if (n < 0) throw new Error("解密失败：密码错误或数据损坏");
       return mem().slice(op, op + n);
     },
     sha256(input) {
