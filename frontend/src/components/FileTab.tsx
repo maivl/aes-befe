@@ -158,7 +158,7 @@ export function FileTab() {
           <h2 class="text-[15px] font-semibold text-[var(--color-fg)]">文件加密</h2>
           <span class="text-[11px] text-[var(--color-muted)]">GCM · OPFS</span>
         </div>
-        <FileDrop zone="encrypt" icon="🔒" label={encFile() ? encFile()!.name : "选择文件"} hint={encFile() ? `${formatBytes(encFile()!.size)} · ${guessMime(encFile()!)}` : "任意类型 · OPFS 流式"} onFiles={pickEnc} />
+        <FileDrop zone="encrypt" label={encFile() ? encFile()!.name : "选择文件"} hint={encFile() ? `${formatBytes(encFile()!.size)} · ${guessMime(encFile()!)}` : "任意类型 · OPFS 流式"} onFiles={pickEnc} />
         <Show when={encFile()}>
           <div class="mt-4 space-y-3">
             <div>
@@ -219,7 +219,7 @@ export function FileTab() {
           <h2 class="text-[15px] font-semibold text-[var(--color-fg)]">文件解密 / 预览</h2>
           <span class="text-[11px] text-[var(--color-muted)]">免密读取文件头</span>
         </div>
-        <FileDrop zone="decrypt" icon="🔓" label={decFile() ? decFile()!.name : "选择 .enc 文件"} hint={decFile() ? formatBytes(decFile()!.size) : "OPFS 流式解密"} onFiles={pickDec} />
+        <FileDrop zone="decrypt" label={decFile() ? decFile()!.name : "选择 .enc 文件"} hint={decFile() ? formatBytes(decFile()!.size) : "OPFS 流式解密"} onFiles={pickDec} />
         <Show when={!decMeta() && decFile()}><Empty>正在读取文件头…</Empty></Show>
         <Show when={decMeta()}>
           <div class="mt-4 rounded-xl bg-[var(--color-surface)] border border-[var(--color-border)] p-4">

@@ -1,11 +1,11 @@
 import { createSignal } from "solid-js";
+import { UploadCloud } from "lucide-solid";
 
 export function FileDrop(props: {
   zone?: string;
   label: string;
   hint?: string;
   onFiles: (files: File[]) => void;
-  icon?: string;
 }) {
   const [drag, setDrag] = createSignal(false);
   let input: HTMLInputElement | undefined;
@@ -33,7 +33,7 @@ export function FileDrop(props: {
           e.target.value = "";
         }}
       />
-      <div class="text-[var(--color-muted-light)] text-3xl mb-2">{props.icon ?? "⬆"}</div>
+      <UploadCloud size={32} class="text-[var(--color-muted-light)] mx-auto mb-2" />
       <div class="text-[14px] font-medium text-[var(--color-fg)]">{props.label}</div>
       {props.hint && <div class="text-[12px] text-[var(--color-muted)] mt-0.5">{props.hint}</div>}
     </div>

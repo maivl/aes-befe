@@ -1,8 +1,8 @@
 // WebWorker: runs all crypto locally via Zig-compiled crypto.wasm (AES-256-GCM).
 // Streams file data — NEVER loads the entire file into memory.
-// For decrypt: writes chunks directly to OPFS inside the worker (no postMessage
-// chunk transfer → no memory doubling → no iOS Safari OOM).
-// For encrypt: writes chunks directly to OPFS, main thread creates download URL.
+// For decrypt/encrypt: writes chunks directly to OPFS inside the worker.
+// Uses createSyncAccessHandle (worker-only sync API) for iOS Safari compatibility.
+// Falls back to Blob (postMessage) when OPFS unavailable.
 import { getZigCore } from "@crypto-core/src/zig-loader-web";
 import {
   encryptFileStream,
@@ -28,36 +28,54 @@ type Req =
 
 function post(msg: any) { (self as any).postMessage(msg); }
 
-/** Convert a ReadableStream to AsyncIterable. */
 function streamIter(stream: ReadableStream<Uint8Array>): AsyncIterable<Uint8Array> {
   const reader = stream.getReader();
   return { [Symbol.asyncIterator]() {
     return {
-      async next() {
-        const r = await reader.read();
-        if (r.done) return { value: undefined, done: true as const };
-        return { value: r.value as Uint8Array, done: false as const };
-      },
+      async next() { const r = await reader.read(); if (r.done) return { value: undefined, done: true as const }; return { value: r.value as Uint8Array, done: false as const }; },
       async return() { try { await reader.cancel(); } catch {} return { value: undefined, done: true as const }; },
     };
   }};
 }
 
-/** Check if OPFS is available (Worker context). */
+// OPFS: use createSyncAccessHandle (worker-only, iOS Safari compatible)
+// Falls back to createWritable (main-thread style) if sync not available.
 function isOPFSAvailable(): boolean {
   return typeof (self as any).navigator?.storage?.getDirectory === "function";
 }
 
-/** Create an OPFS writable stream + file handle. Returns null if OPFS unavailable. */
 async function createOPFSWriter(filename: string) {
   if (!isOPFSAvailable()) return null;
   try {
     const root = await (self as any).navigator.storage.getDirectory();
     const safeName = filename.replace(/[^a-zA-Z0-9._-]/g, "_");
     const handle = await root.getFileHandle(safeName, { create: true });
-    const writable = await handle.createWritable();
-    const writer = writable.getWriter();
-    return { writer, handle, root, name: safeName };
+    // Try createSyncAccessHandle first (worker-only, iOS Safari compatible)
+    if (typeof handle.createSyncAccessHandle === "function") {
+      const syncHandle = await handle.createSyncAccessHandle();
+      return {
+        type: "sync" as const,
+        write: (data: Uint8Array) => syncHandle.write(data),
+        close: () => syncHandle.close(),
+        handle,
+        root,
+        name: safeName,
+      };
+    }
+    // Fall back to createWritable (Chrome, Firefox)
+    if (typeof handle.createWritable === "function") {
+      const writable = await handle.createWritable();
+      const writer = writable.getWriter();
+      return {
+        type: "writable" as const,
+        write: (data: Uint8Array) => writer.write(data),
+        close: () => writer.close(),
+        handle,
+        root,
+        name: safeName,
+      };
+    }
+    return null;
   } catch { return null; }
 }
 
@@ -69,7 +87,6 @@ async function handle(req: Req) {
     if (type === "encryptFile") {
       const { file, password, meta, thumbnail } = req;
       const stream = file.stream() as ReadableStream<Uint8Array>;
-      // Try OPFS for encrypted output (avoids collecting all chunks in memory)
       const opfs = await createOPFSWriter((file.name || "encrypted") + ".enc");
       const blobParts: Uint8Array[] = [];
       let totalSize = 0;
@@ -79,14 +96,15 @@ async function handle(req: Req) {
         onProgress: (done, total) => post({ id, type: "progress", done, total, phase: "加密中" }),
       })) {
         totalSize += chunk.length;
+        const copy = new Uint8Array(chunk); // copy (chunk is a view into wasm memory)
         if (opfs) {
-          await opfs.writer.write(new Uint8Array(chunk));
+          opfs.write(copy);
         } else {
-          blobParts.push(new Uint8Array(chunk));
+          blobParts.push(copy);
         }
       }
       if (opfs) {
-        await opfs.writer.close();
+        await opfs.close();
         post({ id, type: "done", size: totalSize, opfsName: opfs.name });
       } else {
         const blob = new Blob(blobParts, { type: "application/octet-stream" });
@@ -95,10 +113,6 @@ async function handle(req: Req) {
 
     } else if (type === "decryptFile") {
       const { file, password } = req;
-      // Pass file.stream() DIRECTLY to decryptFileStream — it uses ByteReader
-      // which streams the header efficiently (only buffers what it needs).
-      // Do NOT pre-parse the header here — that was causing "Not ENC1" because
-      // decryptFileStream also parses the header and got ciphertext instead.
       const stream = file.stream() as ReadableStream<Uint8Array>;
       const opfs = await createOPFSWriter("decrypted_" + (file.name || "file"));
       const blobParts: Uint8Array[] = [];
@@ -111,19 +125,19 @@ async function handle(req: Req) {
         onProgress: (done, total) => post({ id, type: "progress", done, total, phase: "解密中" }),
       })) {
         totalSize += chunk.length;
+        const copy = new Uint8Array(chunk);
         if (opfs) {
-          await opfs.writer.write(new Uint8Array(chunk));
+          opfs.write(copy);
         } else {
-          blobParts.push(new Uint8Array(chunk));
+          blobParts.push(copy);
         }
       }
 
-      // Extract meta from decryptFileStream's closure (set at end of generator)
       resultMeta = (decryptFileStream as any).__meta || null;
       resultThumb = (decryptFileStream as any).__thumb ? bytesToBase64((decryptFileStream as any).__thumb) : undefined;
 
       if (opfs) {
-        await opfs.writer.close();
+        await opfs.close();
         post({ id, type: "done", size: totalSize, meta: resultMeta, thumbnailBase64: resultThumb, opfsName: opfs.name });
       } else {
         const mime = resultMeta?.mimeType || "application/octet-stream";
