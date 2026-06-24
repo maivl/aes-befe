@@ -4,7 +4,9 @@ import { mode, toast } from "../store";
 import { workerApi, enableFilePicker, type Progress, type InspectResult } from "../lib/worker";
 import { backendApi } from "../lib/api";
 import { generateThumbnail, type ThumbResult } from "../lib/thumbnail";
-import { formatBytes, formatDate, downloadBlob, guessMime, getExtension } from "../lib/format";
+import { formatBytes, formatDate, guessMime, getExtension } from "../lib/format";
+import { shareOrDownload } from "../lib/share";
+import { getOPFSFile } from "../lib/opfs-manager";
 import { ProgressBar, Empty } from "./ui";
 import { FileDrop } from "./FileDrop";
 import { PasswordEmojiPreview } from "./PasswordEmojiPreview";
@@ -18,23 +20,22 @@ export function FileTab() {
   const [customThumbFile, setCustomThumbFile] = createSignal<File | null>(null);
   const [busy, setBusy] = createSignal(false);
   const [progress, setProgress] = createSignal<Progress | null>(null);
-  const [resultBlob, setResultBlob] = createSignal<Blob | null>(null);
   const [resultSize, setResultSize] = createSignal(0);
+  const [resultOpfsName, setResultOpfsName] = createSignal<string | null>(null);
+  const [resultBlob, setResultBlob] = createSignal<Blob | null>(null);
 
   const [decFile, setDecFile] = createSignal<File | null>(null);
   const [decPw, setDecPw] = createSignal("");
   const [decMeta, setDecMeta] = createSignal<InspectResult | null>(null);
   const [decBusy, setDecBusy] = createSignal(false);
   const [decProgress, setDecProgress] = createSignal<Progress | null>(null);
-  const [decBlob, setDecBlob] = createSignal<Blob | null>(null);
   const [decPreviewUrl, setDecPreviewUrl] = createSignal<string | null>(null);
+  const [decOpfsName, setDecOpfsName] = createSignal<string | null>(null);
   let previewCleanup: (() => Promise<void>) | null = null;
-
-  // Clean up OPFS file / Blob URL when component unmounts
   onCleanup(() => { previewCleanup?.(); });
 
   async function pickEnc(files: File[]) {
-    const f = files[0]; setEncFile(f); setResultBlob(null); setThumb(null); setCustomThumbFile(null);
+    const f = files[0]; setEncFile(f); setResultBlob(null); setResultOpfsName(null); setThumb(null); setCustomThumbFile(null);
     if (f && embedThumb() && /image|video/.test(f.type)) setThumb(await generateThumbnail(f));
   }
   async function toggleThumb(v: boolean) {
@@ -48,11 +49,22 @@ export function FileTab() {
     setCustomThumbFile(f); const t = await generateThumbnail(f);
     if (t) { setThumb(t); toast("success", "自定义缩略图已设置"); } else toast("error", "缩略图生成失败");
   }
+
+  async function shareEncrypted() {
+    const name = (encFile()?.name || "file") + ".enc";
+    if (resultOpfsName()) {
+      const file = await getOPFSFile(resultOpfsName()!);
+      if (file) { await shareOrDownload(file, name); return; }
+    }
+    if (resultBlob()) { await shareOrDownload(resultBlob()!, name); }
+  }
+
   async function doEnc() {
     const f = encFile(); if (!f) return toast("error", "请先选择文件");
     if (!encPw()) return toast("error", "请输入密码");
-    enableFilePicker(); // enable in click handler (user gesture)
-    setBusy(true); setProgress({ done: 0, total: f.size, phase: "准备中" }); setResultBlob(null);
+    enableFilePicker();
+    setBusy(true); setProgress({ done: 0, total: f.size, phase: "准备中" });
+    setResultBlob(null); setResultOpfsName(null);
     try {
       const meta: FileMeta = {
         originalName: f.name, originalSize: f.size, mimeType: guessMime(f), extension: getExtension(f.name),
@@ -60,96 +72,65 @@ export function FileTab() {
         encryptedAt: "", note: encNote(),
         ...(thumb() ? { thumbnailMime: thumb()!.mime, thumbnailW: thumb()!.width, thumbnailH: thumb()!.height } : {}),
       };
-      if (mode() === "local") {
-        const result = await workerApi.encryptFile(f, encPw(), meta, thumb()?.bytes, setProgress);
-        if (result.opfsName) {
-          // OPFS: worker wrote encrypted file to OPFS, get URL for download
-          try {
-            const root = await (navigator as any).storage.getDirectory();
-            const handle = await root.getFileHandle(result.opfsName);
-            const file2 = await handle.getFile();
-            const blob = new Blob([file2], { type: "application/octet-stream" });
-            setResultBlob(blob); setResultSize(blob.size);
-            toast("success", `加密完成 · ${formatBytes(blob.size)}`);
-          } catch {
-            setResultSize(result.size);
-            toast("success", `加密完成 · ${formatBytes(result.size)}`);
-          }
-        } else if (result.blob) {
-          setResultBlob(result.blob); setResultSize(result.blob.size);
-          toast("success", `加密完成 · ${formatBytes(result.blob.size)}`);
-        }
-      } else {
-        const blob = await backendApi.encryptFile(f, encPw(), meta, thumb()?.bytes);
-        setResultBlob(blob); setResultSize(blob.size);
-        toast("success", `加密完成 · ${formatBytes(blob.size)}`);
+      const result = await workerApi.encryptFile(f, encPw(), meta, thumb()?.bytes, setProgress);
+      if (result.opfsName) {
+        setResultOpfsName(result.opfsName); setResultSize(result.size);
+        toast("success", `加密完成 · ${formatBytes(result.size)}`);
+      } else if (result.blob) {
+        setResultBlob(result.blob); setResultSize(result.blob.size);
+        toast("success", `加密完成 · ${formatBytes(result.blob.size)}`);
       }
     } catch (e: any) {
-      if (e?.name === "AbortError") { toast("info", "已取消保存"); setBusy(false); setProgress(null); return; }
-      toast("error", e?.message || "加密失败");
-    }
-    finally { setBusy(false); setProgress(null); }
+      if (e?.name === "AbortError") { toast("info", "已取消"); }
+      else toast("error", e?.message || "加密失败");
+    } finally { setBusy(false); setProgress(null); }
   }
+
   async function pickDec(files: File[]) {
-    const f = files[0]; setDecFile(f); setDecMeta(null); setDecBlob(null); setDecPw(""); setDecProgress(null);
+    const f = files[0]; setDecFile(f); setDecMeta(null); setDecPreviewUrl(null); setDecPw(""); setDecProgress(null); setDecOpfsName(null);
     if (!f) return;
-    try { setDecMeta(mode() === "local" ? await workerApi.inspectFile(f) : await backendApi.inspect(f)); }
+    try { setDecMeta(await workerApi.inspectFile(f)); }
     catch (e: any) { toast("error", "无法读取文件头：" + (e?.message || "")); }
   }
+
+  async function shareDecrypted() {
+    const name = decMeta()?.meta.originalName || "decrypted";
+    if (decOpfsName()) {
+      const file = await getOPFSFile(decOpfsName()!);
+      if (file) { await shareOrDownload(file, name); return; }
+    }
+  }
+
   async function doDec() {
     const f = decFile(); if (!f) return toast("error", "请选择加密文件");
     if (!decPw()) return toast("error", "请输入密码");
     enableFilePicker();
-    setDecBusy(true); setDecBlob(null); setDecPreviewUrl(null);
+    setDecBusy(true); setDecPreviewUrl(null); setDecOpfsName(null);
     if (previewCleanup) { try { await previewCleanup(); } catch {} previewCleanup = null; }
     setDecProgress({ done: 0, total: f.size, phase: "解密中" });
     try {
-      if (mode() === "local") {
-        // Worker streams file → decrypts → writes directly to OPFS (no chunk
-        // postMessage → no memory doubling → no iOS Safari OOM).
-        const result = await workerApi.decryptFile(f, decPw(), (p) => setDecProgress(p));
-        const mime = result.meta?.mimeType || decMeta()?.meta.mimeType || "";
-        if (result.url) {
-          // OPFS path: worker wrote to OPFS, URL is from OPFS file
-          setDecPreviewUrl(result.url);
-          previewCleanup = async () => {
-            URL.revokeObjectURL(result.url!);
-            // Also clean up OPFS file
-            if (result.opfsName) {
-              try {
-                const root = await (navigator as any).storage.getDirectory();
-                await root.removeEntry(result.opfsName);
-              } catch {}
-            }
-          };
-        } else if (result.blob) {
-          setDecBlob(result.blob);
-          if (/^image\/|^video\//.test(mime)) {
-            const url = URL.createObjectURL(result.blob);
-            setDecPreviewUrl(url);
-            previewCleanup = async () => URL.revokeObjectURL(url);
+      const result = await workerApi.decryptFile(f, decPw(), (p) => setDecProgress(p));
+      const mime = result.meta?.mimeType || "";
+      if (result.url) {
+        setDecPreviewUrl(result.url);
+        setDecOpfsName(result.opfsName || null);
+        previewCleanup = async () => {
+          URL.revokeObjectURL(result.url!);
+          if (result.opfsName) {
+            try { const root = await (navigator as any).storage.getDirectory(); await root.removeEntry(result.opfsName); } catch {}
           }
-        }
+        };
         toast("success", `解密完成 · ${formatBytes(result.size)}`);
-        if (/^image\/|^video\//.test(mime)) {
-          toast("info", mime.startsWith("video/") ? "视频预览已加载" : "图片预览已加载");
-        }
-      } else {
-        const blob = await backendApi.decryptFile(f, decPw());
-        const mime = decMeta()?.meta.mimeType || "";
-        setDecBlob(blob);
-        toast("success", `解密完成 · ${formatBytes(blob.size)}`);
-        if (/^image\/|^video\//.test(mime)) {
-          const url = URL.createObjectURL(blob);
-          setDecPreviewUrl(url);
-          previewCleanup = async () => URL.revokeObjectURL(url);
-        }
+        if (/^image\/|^video\//.test(mime)) toast("info", mime.startsWith("video/") ? "视频预览已加载" : "图片预览已加载");
+      } else if (result.blob) {
+        setDecPreviewUrl(URL.createObjectURL(result.blob));
+        previewCleanup = async () => URL.revokeObjectURL(result.url || "");
+        toast("success", `解密完成 · ${formatBytes(result.blob.size)}`);
       }
     } catch (e: any) {
-      if (e?.name === "AbortError") { toast("info", "已取消保存"); setDecBusy(false); setDecProgress(null); return; }
-      toast("error", "解密失败：" + (e?.message || "密码错误"));
-    }
-    finally { setDecBusy(false); setDecProgress(null); }
+      if (e?.name === "AbortError") { toast("info", "已取消"); }
+      else toast("error", "解密失败：" + (e?.message || "密码错误"));
+    } finally { setDecBusy(false); setDecProgress(null); }
   }
 
   const modeLabel = createMemo(() => (mode() === "local" ? "前端本地" : "后端服务"));
@@ -160,9 +141,9 @@ export function FileTab() {
       <div class="surface p-5">
         <div class="flex items-center justify-between mb-4">
           <h2 class="text-[15px] font-semibold text-[var(--color-fg)]">文件加密</h2>
-          <span class="text-[11px] text-[var(--color-muted)]">GCM 认证加密</span>
+          <span class="text-[11px] text-[var(--color-muted)]">GCM · OPFS</span>
         </div>
-        <FileDrop zone="encrypt" icon="🔒" label={encFile() ? encFile()!.name : "选择文件"} hint={encFile() ? `${formatBytes(encFile()!.size)} · ${guessMime(encFile()!)}` : "任意类型 · 支持大文件"} onFiles={pickEnc} />
+        <FileDrop zone="encrypt" icon="🔒" label={encFile() ? encFile()!.name : "选择文件"} hint={encFile() ? `${formatBytes(encFile()!.size)} · ${guessMime(encFile()!)}` : "任意类型 · OPFS 流式"} onFiles={pickEnc} />
         <Show when={encFile()}>
           <div class="mt-4 space-y-3">
             <div>
@@ -202,15 +183,17 @@ export function FileTab() {
             <Show when={progress()}><ProgressBar done={progress()!.done} total={progress()!.total} phase={progress()!.phase} /></Show>
             <div class="flex gap-2">
               <button class="btn btn-primary flex-1" disabled={busy()} onClick={doEnc}>{busy() ? "加密中…" : "加密文件"}</button>
-              <Show when={resultBlob()}><button class="btn btn-ghost" onClick={() => downloadBlob(resultBlob()!, encFile()!.name + ".enc")}>下载 .enc</button></Show>
+              <Show when={resultSize() > 0}>
+                <button class="btn btn-ghost" onClick={shareEncrypted}>分享</button>
+              </Show>
             </div>
-            <Show when={resultBlob()}>
+            <Show when={resultSize() > 0}>
               <div class="grid grid-cols-2 gap-2">
                 <div class="stat"><span class="stat-k">原始</span><span class="stat-v">{formatBytes(encFile()!.size)}</span></div>
                 <div class="stat"><span class="stat-k">密文</span><span class="stat-v">{formatBytes(resultSize())}</span></div>
               </div>
             </Show>
-            <div class="text-[11px] text-[var(--color-muted)]">{modeLabel()} · {mode() === "local" ? "明文不离开浏览器" : "上传至后端"}</div>
+            <div class="text-[11px] text-[var(--color-muted)]">{modeLabel()} · OPFS 流式</div>
           </div>
         </Show>
       </div>
@@ -221,7 +204,7 @@ export function FileTab() {
           <h2 class="text-[15px] font-semibold text-[var(--color-fg)]">文件解密 / 预览</h2>
           <span class="text-[11px] text-[var(--color-muted)]">免密读取文件头</span>
         </div>
-        <FileDrop zone="decrypt" icon="🔓" label={decFile() ? decFile()!.name : "选择 .enc 文件"} hint={decFile() ? formatBytes(decFile()!.size) : "选中后显示文件头信息"} onFiles={pickDec} />
+        <FileDrop zone="decrypt" icon="🔓" label={decFile() ? decFile()!.name : "选择 .enc 文件"} hint={decFile() ? formatBytes(decFile()!.size) : "OPFS 流式解密"} onFiles={pickDec} />
         <Show when={!decMeta() && decFile()}><Empty>正在读取文件头…</Empty></Show>
         <Show when={decMeta()}>
           <div class="mt-4 rounded-xl bg-[var(--color-surface)] border border-[var(--color-border)] p-4">
@@ -234,15 +217,12 @@ export function FileTab() {
                 <div class="text-[12px] text-[var(--color-muted)] mt-0.5">{formatBytes(decMeta()!.meta.originalSize)} · {decMeta()!.meta.mimeType}</div>
                 <div class="flex items-center gap-2 mt-1.5">
                   <Show when={decMeta()!.meta.passwordEmoji}>
-                    <span class="inline-flex items-center gap-1 text-[12px] text-[var(--color-muted)]">
-                      密码指纹 <span class="text-base">{decMeta()!.meta.passwordEmoji}</span>
-                    </span>
+                    <span class="inline-flex items-center gap-1 text-[12px] text-[var(--color-muted)]">密码指纹 <span class="text-base">{decMeta()!.meta.passwordEmoji}</span></span>
                   </Show>
                   <span class="text-[11px] text-[var(--color-success)]">免密读取</span>
                 </div>
               </div>
             </div>
-            {/* Metadata grid — full info, better layout */}
             <div class="grid grid-cols-2 gap-1.5">
               <div class="stat"><span class="stat-k">扩展名</span><span class="stat-v">{decMeta()!.meta.extension || "—"}</span></div>
               <div class="stat"><span class="stat-k">MIME</span><span class="stat-v">{decMeta()!.meta.mimeType}</span></div>
@@ -266,7 +246,9 @@ export function FileTab() {
             <Show when={decProgress()}><ProgressBar done={decProgress()!.done} total={decProgress()!.total} phase={decProgress()!.phase} /></Show>
             <div class="flex gap-2">
               <button class="btn btn-primary flex-1" disabled={decBusy()} onClick={doDec}>{decBusy() ? "解密中…" : "解密文件"}</button>
-              <Show when={decBlob()}><button class="btn btn-ghost" onClick={() => downloadBlob(decBlob()!, decMeta()?.meta.originalName || "decrypted")}>下载原文件</button></Show>
+              <Show when={decPreviewUrl()}>
+                <button class="btn btn-ghost" onClick={shareDecrypted}>分享</button>
+              </Show>
             </div>
             <Show when={decPreviewUrl()}>
               <div class="rounded-xl border border-[var(--color-border)] overflow-hidden bg-[var(--color-surface)]">
@@ -280,9 +262,12 @@ export function FileTab() {
                 <Show when={decMeta()?.meta.mimeType?.startsWith("video/")}>
                   <video src={decPreviewUrl()!} class="w-full max-h-[60vh]" controls playsinline preload="auto" />
                 </Show>
+                <Show when={!decMeta()?.meta.mimeType?.startsWith("image/") && !decMeta()?.meta.mimeType?.startsWith("video/")}>
+                  <div class="p-4 text-[12px] text-[var(--color-muted)]">非媒体文件，点击「分享」保存或查看</div>
+                </Show>
               </div>
             </Show>
-            <div class="text-[11px] text-[var(--color-muted)]">{modeLabel()}</div>
+            <div class="text-[11px] text-[var(--color-muted)]">{modeLabel()} · OPFS 流式</div>
           </div>
         </Show>
       </div>

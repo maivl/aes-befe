@@ -5,6 +5,8 @@ import { FileTab } from "./components/FileTab";
 import { TextTab } from "./components/TextTab";
 import { InspectTab } from "./components/InspectTab";
 import { Toasts } from "./components/ui";
+import { SettingsDialog } from "./components/SettingsDialog";
+import { Settings } from "lucide-solid";
 
 type Tab = "file" | "text" | "inspect";
 const TABS: { id: Tab; label: string }[] = [
@@ -16,6 +18,7 @@ const TABS: { id: Tab; label: string }[] = [
 export default function App() {
   const [tab, setTab] = createSignal<Tab>("file");
   const [backendUp, setBackendUp] = createSignal<boolean | null>(null);
+  const [settingsOpen, setSettingsOpen] = createSignal(false);
 
   onMount(async () => {
     try { await backendApi.health(); setBackendUp(true); } catch { setBackendUp(false); }
@@ -24,9 +27,11 @@ export default function App() {
   return (
     <div class="min-h-screen flex flex-col bg-[var(--color-bg)]">
       <Toasts />
+      <SettingsDialog open={settingsOpen()} onClose={() => setSettingsOpen(false)} />
 
-      <header class="sticky top-0 z-40 border-b border-[var(--color-border)] bg-[var(--color-bg)]/80 backdrop-blur-lg">
-        <div class="max-w-3xl mx-auto px-4 py-3 flex items-center justify-between gap-3">
+      {/* Header — use fixed instead of sticky to avoid iOS Safari reflow bug */}
+      <header class="fixed top-0 left-0 right-0 z-40 border-b border-[var(--color-border)] bg-[var(--color-bg)]/90 backdrop-blur-lg">
+        <div class="max-w-3xl mx-auto px-4 py-3 flex items-center justify-between gap-3" style={{ "padding-top": "max(0.75rem, env(safe-area-inset-top))" }}>
           <div class="flex items-center gap-2.5">
             <img src="/favicon.svg" class="w-8 h-8 rounded-lg" alt="logo" />
             <div>
@@ -34,18 +39,30 @@ export default function App() {
               <div class="text-[11px] text-[var(--color-muted)] leading-tight">AES-256-GCM · Zig Wasm + .so</div>
             </div>
           </div>
-          <div class="flex items-center gap-0.5 p-0.5 rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)]">
+          <div class="flex items-center gap-2">
+            <div class="flex items-center gap-0.5 p-0.5 rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)]">
+              <button
+                class={`px-3 py-1.5 rounded-lg text-[12px] font-medium transition-all ${mode() === "local" ? "bg-[var(--color-accent)] text-white shadow-sm" : "text-[var(--color-muted)] hover:text-[var(--color-fg)]"}`}
+                onClick={() => { setMode("local"); toast("info", "前端本地加密（隐私优先）"); }}
+              >前端本地</button>
+              <button
+                class={`px-3 py-1.5 rounded-lg text-[12px] font-medium transition-all ${mode() === "backend" ? "bg-[var(--color-accent)] text-white shadow-sm" : "text-[var(--color-muted)] hover:text-[var(--color-fg)]"}`}
+                onClick={() => { setMode("backend"); toast("info", "后端服务加密（可控优先）"); }}
+              >后端服务</button>
+            </div>
             <button
-              class={`px-3 py-1.5 rounded-lg text-[12px] font-medium transition-all ${mode() === "local" ? "bg-[var(--color-accent)] text-white shadow-sm" : "text-[var(--color-muted)] hover:text-[var(--color-fg)]"}`}
-              onClick={() => { setMode("local"); toast("info", "前端本地加密（隐私优先）"); }}
-            >前端本地</button>
-            <button
-              class={`px-3 py-1.5 rounded-lg text-[12px] font-medium transition-all ${mode() === "backend" ? "bg-[var(--color-accent)] text-white shadow-sm" : "text-[var(--color-muted)] hover:text-[var(--color-fg)]"}`}
-              onClick={() => { setMode("backend"); toast("info", "后端服务加密（可控优先）"); }}
-            >后端服务</button>
+              class="p-2 rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-fg)] transition-colors"
+              onClick={() => setSettingsOpen(true)}
+              title="OPFS 文件管理"
+            >
+              <Settings size={18} />
+            </button>
           </div>
         </div>
       </header>
+
+      {/* Spacer for fixed header */}
+      <div style={{ height: "calc(3.5rem + env(safe-area-inset-top))" }} />
 
       <main class="flex-1 max-w-3xl w-full mx-auto px-4 py-6">
         <div class="mb-6">
@@ -81,7 +98,7 @@ export default function App() {
       </main>
 
       <footer class="mt-auto border-t border-[var(--color-border)]">
-        <div class="max-w-3xl mx-auto px-4 py-4 flex flex-col sm:flex-row items-center justify-between gap-1.5 text-[11px] text-[var(--color-muted)]">
+        <div class="max-w-3xl mx-auto px-4 py-4 flex flex-col sm:flex-row items-center justify-between gap-1.5 text-[11px] text-[var(--color-muted)]" style={{ "padding-bottom": "max(1rem, env(safe-area-inset-bottom))" }}>
           <span>同一份 Zig 核心 · 前端 Wasm / 后端动态库 · 格式 100% 互通</span>
           <span class="font-mono">ENC1 / ENT1 · v2 GCM</span>
         </div>

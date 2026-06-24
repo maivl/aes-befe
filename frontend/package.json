@@ -9,6 +9,7 @@
     "preview": "vite preview --port 5173"
   },
   "dependencies": {
+    "lucide-solid": "^1.21.0",
     "solid-js": "^1.9.13"
   },
   "devDependencies": {
