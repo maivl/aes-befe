@@ -188,37 +188,34 @@ export async function* decryptFileStream(opts: {
   core: ZigCore; password: Uint8Array; ciphertext: Source;
   onProgress?: (done: number, total: number) => void;
 }): AsyncGenerator<Uint8Array> {
-  // Read all bytes (needed for chunk splitting)
-  const chunks: Uint8Array[] = [];
-  for await (const c of toIter(opts.ciphertext)) { if (c.length) chunks.push(c); }
-  const b = concat(chunks);
-  if (utf8Decode(b.subarray(0, 4)) !== MAGIC_FILE) throw new Error(`Not ENC1`);
-  const ver = b[4];
+  // Stream decrypt: read header first, then read ciphertext chunk by chunk.
+  // Does NOT load the entire file into memory.
+  const reader = new ByteReader(toIter(opts.ciphertext));
+  if (utf8Decode(await reader.read(4)) !== MAGIC_FILE) throw new Error(`Not ENC1`);
+  const ver = (await reader.read(1))[0];
   if (ver !== VERSION) throw new Error(`Unsupported version ${ver} (expected ${VERSION} GCM)`);
-  let off = 8;
-  const jl = readU32le(b, off); off += 4;
-  const meta: FileMeta = JSON.parse(utf8Decode(b.subarray(off, off + jl))); off += jl;
-  const tl = readU32le(b, off); off += 4;
-  const thumbnail = tl > 0 ? b.subarray(off, off + tl) : undefined; off += tl;
-  const salt = b.subarray(off, off + ZIG_CONST.SALT_LEN); off += ZIG_CONST.SALT_LEN;
-  const baseNonce = b.subarray(off, off + ZIG_CONST.NONCE_LEN); off += ZIG_CONST.NONCE_LEN;
-  const chunkSize = readU32le(b, off); off += 4;
+  await reader.read(1); // flags
+  await reader.read(2); // rsv
+  const jl = await reader.readU32();
+  const meta: FileMeta = JSON.parse(utf8Decode(await reader.read(jl)));
+  const tl = await reader.readU32();
+  const thumbnail = tl > 0 ? await reader.read(tl) : undefined;
+  const salt = await reader.read(ZIG_CONST.SALT_LEN);
+  const baseNonce = await reader.read(ZIG_CONST.NONCE_LEN);
+  const chunkSize = await reader.readU32();
   const key = await opts.core.deriveKey(opts.password, salt);
 
-  // Decrypt chunk by chunk
+  // Decrypt chunk by chunk — read exactly ctLen bytes per chunk from the stream
   let remaining = meta.originalSize;
   let chunkIndex = 0;
   let totalDone = 0;
-  let ctOff = off;
   while (remaining > 0) {
     const ptLen = Math.min(chunkSize, remaining);
     const ctLen = ptLen + ZIG_CONST.TAG_LEN;
-    if (ctOff + ctLen > b.length) throw new Error(`Unexpected EOF in ciphertext (chunk ${chunkIndex})`);
-    const ct = b.subarray(ctOff, ctOff + ctLen);
+    const ct = await reader.read(ctLen); // ByteReader buffers across stream chunks
     const nonce = chunkNonce(baseNonce, chunkIndex);
     const pt = await opts.core.gcmDecrypt(key, nonce, ct);
     yield pt;
-    ctOff += ctLen;
     remaining -= ptLen;
     chunkIndex++;
     totalDone += ptLen;

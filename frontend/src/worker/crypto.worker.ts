@@ -1,5 +1,7 @@
-// WebWorker: runs all crypto locally via the Zig-compiled crypto.wasm (AES-256-GCM).
-// Files are encrypted/decrypted in 4MB chunks to avoid exhausting the wasm heap.
+// WebWorker: runs all crypto locally via Zig-compiled crypto.wasm (AES-256-GCM).
+// Streams chunks to main thread ONE AT A TIME (not collected in memory).
+// Main thread writes chunks directly to file via File System Access API
+// (showSaveFilePicker) or falls back to Blob for older browsers.
 import { getZigCore } from "@crypto-core/src/zig-loader-web";
 import {
   encryptFileStream,
@@ -16,13 +18,16 @@ let coreReady: Promise<any> | null = null;
 function core() { if (!coreReady) coreReady = getZigCore(); return coreReady; }
 
 type Req =
-  | { id: number; type: "encryptFile"; file: File; password: string; meta: FileMeta; thumbnail?: Uint8Array }
-  | { id: number; type: "decryptFile"; file: File; password: string }
+  | { id: number; type: "encryptFile"; file: File; password: string; meta: FileMeta; thumbnail?: Uint8Array; saveFilename?: string }
+  | { id: number; type: "decryptFile"; file: File; password: string; saveFilename?: string }
   | { id: number; type: "inspectFile"; file: File }
   | { id: number; type: "encryptText"; text: string; password: string; note?: string }
   | { id: number; type: "decryptText"; base64: string; password: string };
 
-function post(msg: any) { (self as any).postMessage(msg); }
+function post(msg: any, transfer?: Transferable[]) {
+  if (transfer) (self as any).postMessage(msg, transfer);
+  else (self as any).postMessage(msg);
+}
 
 function bytesIter(bytes: Uint8Array): AsyncIterable<Uint8Array> {
   return { [Symbol.asyncIterator]() {
@@ -31,8 +36,8 @@ function bytesIter(bytes: Uint8Array): AsyncIterable<Uint8Array> {
   } };
 }
 
-// Stream a file in chunks for encryption (avoids loading entire file at once)
-function fileChunkIter(stream: ReadableStream<Uint8Array>, id: number, total: number, phase: string): AsyncIterable<Uint8Array> {
+// Stream a file's ReadableStream in chunks for encryption input
+function fileStreamIter(stream: ReadableStream<Uint8Array>, id: number, total: number, phase: string): AsyncIterable<Uint8Array> {
   const reader = stream.getReader();
   return { [Symbol.asyncIterator]() {
     let done = 0;
@@ -56,27 +61,37 @@ async function handle(req: Req) {
     if (type === "encryptFile") {
       const { file, password, meta, thumbnail } = req;
       const stream = file.stream() as ReadableStream<Uint8Array>;
-      const parts: Uint8Array[] = [];
+      // Stream: yield each encrypted chunk → post to main thread immediately
+      let totalSize = 0;
       for await (const chunk of encryptFileStream({
         core: c, meta, thumbnail, password: utf8Encode(password),
-        plaintext: fileChunkIter(stream, id, file.size, "加密中"),
+        plaintext: fileStreamIter(stream, id, file.size, "加密中"),
         onProgress: (done, total) => post({ id, type: "progress", done, total, phase: "加密中" }),
-      })) parts.push(chunk);
-      const blob = new Blob(parts, { type: "application/octet-stream" });
-      post({ id, type: "done", blob, size: blob.size });
+      })) {
+        // Copy chunk data (don't transfer — transfer can cause detached buffer issues)
+        const copy = new Uint8Array(chunk.length);
+        copy.set(chunk);
+        post({ id, type: "chunk", data: copy.buffer });
+        totalSize += chunk.length;
+      }
+      post({ id, type: "done", size: totalSize, saveFilename: req.saveFilename });
     } else if (type === "decryptFile") {
       const { file, password } = req;
+      // For decrypt, we need to read the file to get the header (for MIME type)
+      // But we stream the ciphertext to the decryptor chunk by chunk
       const bytes = new Uint8Array(await file.arrayBuffer());
       let m: FileMeta | null = null; let thumbnailBase64: string | undefined;
       try { const insp = await inspectFileStream(bytesIter(bytes)); m = insp.meta; if (insp.thumbnail && insp.thumbnail.length) thumbnailBase64 = bytesToBase64(insp.thumbnail); } catch {}
       post({ id, type: "progress", done: 0, total: m?.originalSize || bytes.length, phase: "解密中" });
-      const parts: Uint8Array[] = [];
       for await (const chunk of decryptFileStream({
         core: c, password: utf8Encode(password), ciphertext: bytesIter(bytes),
         onProgress: (done, total) => post({ id, type: "progress", done, total, phase: "解密中" }),
-      })) parts.push(chunk);
-      const blob = new Blob(parts, { type: m?.mimeType || "application/octet-stream" });
-      post({ id, type: "done", blob, size: blob.size, meta: m, thumbnailBase64 });
+      })) {
+        const copy = new Uint8Array(chunk.length);
+        copy.set(chunk);
+        post({ id, type: "chunk", data: copy.buffer });
+      }
+      post({ id, type: "done", size: m?.originalSize || 0, meta: m, thumbnailBase64, saveFilename: req.saveFilename || m?.originalName });
     } else if (type === "inspectFile") {
       const bytes = new Uint8Array(await req.file.arrayBuffer());
       const insp = await inspectFileStream(bytesIter(bytes));

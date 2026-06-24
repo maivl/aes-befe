@@ -54,12 +54,25 @@ export function FileTab() {
         encryptedAt: "", note: encNote(),
         ...(thumb() ? { thumbnailMime: thumb()!.mime, thumbnailW: thumb()!.width, thumbnailH: thumb()!.height } : {}),
       };
-      const blob = mode() === "local"
-        ? (await workerApi.encryptFile(f, encPw(), meta, thumb()?.bytes, setProgress)).blob
-        : await backendApi.encryptFile(f, encPw(), meta, thumb()?.bytes);
-      setResultBlob(blob); setResultSize(blob.size);
-      toast("success", `加密完成 · ${formatBytes(blob.size)}`);
-    } catch (e: any) { toast("error", e?.message || "加密失败"); }
+      if (mode() === "local") {
+        const result = await workerApi.encryptFile(f, encPw(), meta, thumb()?.bytes, setProgress);
+        if (result.streamed) {
+          // File was already saved to disk via File System Access API
+          setResultSize(result.size);
+          toast("success", `加密完成 · 已保存到文件 (${formatBytes(result.size)})`);
+        } else if (result.blob) {
+          setResultBlob(result.blob); setResultSize(result.blob.size);
+          toast("success", `加密完成 · ${formatBytes(result.blob.size)}`);
+        }
+      } else {
+        const blob = await backendApi.encryptFile(f, encPw(), meta, thumb()?.bytes);
+        setResultBlob(blob); setResultSize(blob.size);
+        toast("success", `加密完成 · ${formatBytes(blob.size)}`);
+      }
+    } catch (e: any) {
+      if (e?.name === "AbortError") { toast("info", "已取消保存"); setBusy(false); setProgress(null); return; }
+      toast("error", e?.message || "加密失败");
+    }
     finally { setBusy(false); setProgress(null); }
   }
   async function pickDec(files: File[]) {
@@ -74,11 +87,24 @@ export function FileTab() {
     setDecBusy(true); setDecBlob(null);
     setDecProgress({ done: 0, total: f.size, phase: "解密中" });
     try {
-      const blob = mode() === "local"
-        ? (await workerApi.decryptFile(f, decPw(), setDecProgress)).blob
-        : await backendApi.decryptFile(f, decPw());
-      setDecBlob(blob); toast("success", `解密完成 · ${formatBytes(blob.size)}`);
-    } catch (e: any) { toast("error", "解密失败：" + (e?.message || "密码错误")); }
+      if (mode() === "local") {
+        const result = await workerApi.decryptFile(f, decPw(), setDecProgress);
+        if (result.streamed) {
+          setDecBlob(null);
+          toast("success", `解密完成 · 已保存到文件 (${formatBytes(result.size)})`);
+        } else if (result.blob) {
+          setDecBlob(result.blob);
+          toast("success", `解密完成 · ${formatBytes(result.blob.size)}`);
+        }
+      } else {
+        const blob = await backendApi.decryptFile(f, decPw());
+        setDecBlob(blob);
+        toast("success", `解密完成 · ${formatBytes(blob.size)}`);
+      }
+    } catch (e: any) {
+      if (e?.name === "AbortError") { toast("info", "已取消保存"); setDecBusy(false); setDecProgress(null); return; }
+      toast("error", "解密失败：" + (e?.message || "密码错误"));
+    }
     finally { setDecBusy(false); setDecProgress(null); }
   }
 
