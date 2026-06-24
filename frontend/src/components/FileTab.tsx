@@ -2,10 +2,9 @@ import { createSignal, Show, createMemo, onCleanup } from "solid-js";
 import type { FileMeta } from "@crypto-core/src/format";
 import { mode, toast } from "../store";
 import { workerApi, enableFilePicker, type Progress, type InspectResult } from "../lib/worker";
-import { backendApi } from "../lib/api";
 import { generateThumbnail, type ThumbResult } from "../lib/thumbnail";
 import { formatBytes, formatDate, guessMime, getExtension } from "../lib/format";
-import { shareOrDownload } from "../lib/share";
+import { shareFile, downloadFile } from "../lib/share";
 import { getOPFSFile } from "../lib/opfs-manager";
 import { ProgressBar, Empty } from "./ui";
 import { FileDrop } from "./FileDrop";
@@ -21,8 +20,7 @@ export function FileTab() {
   const [busy, setBusy] = createSignal(false);
   const [progress, setProgress] = createSignal<Progress | null>(null);
   const [resultSize, setResultSize] = createSignal(0);
-  const [resultOpfsName, setResultOpfsName] = createSignal<string | null>(null);
-  const [resultBlob, setResultBlob] = createSignal<Blob | null>(null);
+  const [encResultFile, setEncResultFile] = createSignal<File | null>(null);
 
   const [decFile, setDecFile] = createSignal<File | null>(null);
   const [decPw, setDecPw] = createSignal("");
@@ -30,12 +28,12 @@ export function FileTab() {
   const [decBusy, setDecBusy] = createSignal(false);
   const [decProgress, setDecProgress] = createSignal<Progress | null>(null);
   const [decPreviewUrl, setDecPreviewUrl] = createSignal<string | null>(null);
-  const [decOpfsName, setDecOpfsName] = createSignal<string | null>(null);
+  const [decResultFile, setDecResultFile] = createSignal<File | null>(null);
   let previewCleanup: (() => Promise<void>) | null = null;
   onCleanup(() => { previewCleanup?.(); });
 
   async function pickEnc(files: File[]) {
-    const f = files[0]; setEncFile(f); setResultBlob(null); setResultOpfsName(null); setThumb(null); setCustomThumbFile(null);
+    const f = files[0]; setEncFile(f); setEncResultFile(null); setThumb(null); setCustomThumbFile(null);
     if (f && embedThumb() && /image|video/.test(f.type)) setThumb(await generateThumbnail(f));
   }
   async function toggleThumb(v: boolean) {
@@ -50,13 +48,11 @@ export function FileTab() {
     if (t) { setThumb(t); toast("success", "自定义缩略图已设置"); } else toast("error", "缩略图生成失败");
   }
 
-  async function shareEncrypted() {
-    const name = (encFile()?.name || "file") + ".enc";
-    if (resultOpfsName()) {
-      const file = await getOPFSFile(resultOpfsName()!);
-      if (file) { await shareOrDownload(file, name); return; }
-    }
-    if (resultBlob()) { await shareOrDownload(resultBlob()!, name); }
+  // Share encrypted file — SYNCHRONOUS (pre-fetched File in signal)
+  function shareEncrypted() {
+    const file = encResultFile();
+    if (!file) return;
+    shareFile(file);
   }
 
   async function doEnc() {
@@ -64,7 +60,7 @@ export function FileTab() {
     if (!encPw()) return toast("error", "请输入密码");
     enableFilePicker();
     setBusy(true); setProgress({ done: 0, total: f.size, phase: "准备中" });
-    setResultBlob(null); setResultOpfsName(null);
+    setEncResultFile(null);
     try {
       const meta: FileMeta = {
         originalName: f.name, originalSize: f.size, mimeType: guessMime(f), extension: getExtension(f.name),
@@ -73,11 +69,20 @@ export function FileTab() {
         ...(thumb() ? { thumbnailMime: thumb()!.mime, thumbnailW: thumb()!.width, thumbnailH: thumb()!.height } : {}),
       };
       const result = await workerApi.encryptFile(f, encPw(), meta, thumb()?.bytes, setProgress);
+      const encName = (f.name || "file") + ".enc";
       if (result.opfsName) {
-        setResultOpfsName(result.opfsName); setResultSize(result.size);
+        // Pre-fetch File from OPFS for synchronous share
+        const file = await getOPFSFile(result.opfsName);
+        if (file) {
+          const renamed = new File([file], encName, { type: "application/octet-stream" });
+          setEncResultFile(renamed);
+        }
+        setResultSize(result.size);
         toast("success", `加密完成 · ${formatBytes(result.size)}`);
       } else if (result.blob) {
-        setResultBlob(result.blob); setResultSize(result.blob.size);
+        const file = new File([result.blob], encName, { type: "application/octet-stream" });
+        setEncResultFile(file);
+        setResultSize(result.blob.size);
         toast("success", `加密完成 · ${formatBytes(result.blob.size)}`);
       }
     } catch (e: any) {
@@ -87,33 +92,40 @@ export function FileTab() {
   }
 
   async function pickDec(files: File[]) {
-    const f = files[0]; setDecFile(f); setDecMeta(null); setDecPreviewUrl(null); setDecPw(""); setDecProgress(null); setDecOpfsName(null);
+    const f = files[0]; setDecFile(f); setDecMeta(null); setDecPreviewUrl(null); setDecPw(""); setDecProgress(null); setDecResultFile(null);
     if (!f) return;
     try { setDecMeta(await workerApi.inspectFile(f)); }
     catch (e: any) { toast("error", "无法读取文件头：" + (e?.message || "")); }
   }
 
-  async function shareDecrypted() {
-    const name = decMeta()?.meta.originalName || "decrypted";
-    if (decOpfsName()) {
-      const file = await getOPFSFile(decOpfsName()!);
-      if (file) { await shareOrDownload(file, name); return; }
-    }
+  // Share decrypted file — SYNCHRONOUS (pre-fetched File in signal)
+  function shareDecrypted() {
+    const file = decResultFile();
+    if (!file) return;
+    shareFile(file);
   }
 
   async function doDec() {
     const f = decFile(); if (!f) return toast("error", "请选择加密文件");
     if (!decPw()) return toast("error", "请输入密码");
     enableFilePicker();
-    setDecBusy(true); setDecPreviewUrl(null); setDecOpfsName(null);
+    setDecBusy(true); setDecPreviewUrl(null); setDecResultFile(null);
     if (previewCleanup) { try { await previewCleanup(); } catch {} previewCleanup = null; }
     setDecProgress({ done: 0, total: f.size, phase: "解密中" });
     try {
       const result = await workerApi.decryptFile(f, decPw(), (p) => setDecProgress(p));
       const mime = result.meta?.mimeType || "";
+      const name = result.meta?.originalName || "decrypted";
       if (result.url) {
         setDecPreviewUrl(result.url);
-        setDecOpfsName(result.opfsName || null);
+        // Pre-fetch File from OPFS for synchronous share
+        if (result.opfsName) {
+          const file = await getOPFSFile(result.opfsName);
+          if (file) {
+            const renamed = new File([file], name, { type: mime || "application/octet-stream" });
+            setDecResultFile(renamed);
+          }
+        }
         previewCleanup = async () => {
           URL.revokeObjectURL(result.url!);
           if (result.opfsName) {
@@ -123,8 +135,11 @@ export function FileTab() {
         toast("success", `解密完成 · ${formatBytes(result.size)}`);
         if (/^image\/|^video\//.test(mime)) toast("info", mime.startsWith("video/") ? "视频预览已加载" : "图片预览已加载");
       } else if (result.blob) {
-        setDecPreviewUrl(URL.createObjectURL(result.blob));
-        previewCleanup = async () => URL.revokeObjectURL(result.url || "");
+        const file = new File([result.blob], name, { type: mime || "application/octet-stream" });
+        setDecResultFile(file);
+        const url = URL.createObjectURL(result.blob);
+        setDecPreviewUrl(url);
+        previewCleanup = async () => URL.revokeObjectURL(url);
         toast("success", `解密完成 · ${formatBytes(result.blob.size)}`);
       }
     } catch (e: any) {
@@ -183,7 +198,7 @@ export function FileTab() {
             <Show when={progress()}><ProgressBar done={progress()!.done} total={progress()!.total} phase={progress()!.phase} /></Show>
             <div class="flex gap-2">
               <button class="btn btn-primary flex-1" disabled={busy()} onClick={doEnc}>{busy() ? "加密中…" : "加密文件"}</button>
-              <Show when={resultSize() > 0}>
+              <Show when={encResultFile()}>
                 <button class="btn btn-ghost" onClick={shareEncrypted}>分享</button>
               </Show>
             </div>
@@ -246,7 +261,7 @@ export function FileTab() {
             <Show when={decProgress()}><ProgressBar done={decProgress()!.done} total={decProgress()!.total} phase={decProgress()!.phase} /></Show>
             <div class="flex gap-2">
               <button class="btn btn-primary flex-1" disabled={decBusy()} onClick={doDec}>{decBusy() ? "解密中…" : "解密文件"}</button>
-              <Show when={decPreviewUrl()}>
+              <Show when={decResultFile()}>
                 <button class="btn btn-ghost" onClick={shareDecrypted}>分享</button>
               </Show>
             </div>
@@ -254,7 +269,9 @@ export function FileTab() {
               <div class="rounded-xl border border-[var(--color-border)] overflow-hidden bg-[var(--color-surface)]">
                 <div class="flex items-center justify-between px-3 py-2 border-b border-[var(--color-border)]">
                   <span class="text-[12px] font-medium text-[var(--color-fg)]">解密预览</span>
-                  <a href={decPreviewUrl()!} download={decMeta()?.meta.originalName || "decrypted"} class="text-[11px] text-[var(--color-accent)] hover:underline">下载</a>
+                  <Show when={decResultFile()}>
+                    <button class="text-[11px] text-[var(--color-accent)] hover:underline" onClick={shareDecrypted}>分享</button>
+                  </Show>
                 </div>
                 <Show when={decMeta()?.meta.mimeType?.startsWith("image/")}>
                   <img src={decPreviewUrl()!} class="w-full max-h-[60vh] object-contain" alt="解密预览" />
@@ -263,7 +280,7 @@ export function FileTab() {
                   <video src={decPreviewUrl()!} class="w-full max-h-[60vh]" controls playsinline preload="auto" />
                 </Show>
                 <Show when={!decMeta()?.meta.mimeType?.startsWith("image/") && !decMeta()?.meta.mimeType?.startsWith("video/")}>
-                  <div class="p-4 text-[12px] text-[var(--color-muted)]">非媒体文件，点击「分享」保存或查看</div>
+                  <div class="p-4 text-[12px] text-[var(--color-muted)]">非媒体文件，点击「分享」保存</div>
                 </Show>
               </div>
             </Show>

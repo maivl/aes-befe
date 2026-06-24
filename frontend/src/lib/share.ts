@@ -1,40 +1,40 @@
-// lib/share.ts — Share/Download helper. Uses Web Share API with files when
-// available (iOS Safari, Android Chrome), falls back to download.
+// lib/share.ts — Share/Download helper.
+// IMPORTANT: navigator.share MUST be called synchronously within a user gesture.
+// Callers should pre-fetch the File object BEFORE the click handler, then pass
+// it to shareFile() which is synchronous.
 
 /**
- * Share a file via Web Share API (navigator.share with files).
- * Falls back to download if not supported.
+ * Share a File synchronously (must be called in click handler).
+ * Uses navigator.share({files}) when available, falls back to download.
  */
-export async function shareOrDownload(file: Blob | File, filename: string): Promise<void> {
-  // Ensure it's a File (navigator.share requires File)
-  const shareFile = file instanceof File ? file : new File([file], filename, { type: file.type || "application/octet-stream" });
-
-  if (navigator.canShare && navigator.canShare({ files: [shareFile] })) {
-    try {
-      await navigator.share({ files: [shareFile] });
-      return;
-    } catch (e: any) {
-      if (e.name === "AbortError") return; // user cancelled
-      // Fall through to download
-    }
+export function shareFile(file: File): void {
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    navigator.share({ files: [file] }).catch((e: any) => {
+      if (e.name === "AbortError") return;
+      downloadFile(file);
+    });
+  } else {
+    downloadFile(file);
   }
-  // Fallback: download
-  const url = URL.createObjectURL(shareFile);
+}
+
+/** Download a file (fallback for share). */
+export function downloadFile(file: File | Blob, filename?: string): void {
+  const url = URL.createObjectURL(file);
   const a = document.createElement("a");
   a.href = url;
-  a.download = filename;
+  a.download = filename || (file instanceof File ? file.name : "download");
   document.body.appendChild(a);
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-/**
- * Share text via Web Share API. Falls back to clipboard.
- */
-export async function shareText(text: string): Promise<void> {
+/** Share text. Falls back to clipboard. */
+export function shareText(text: string): void {
   if (navigator.share) {
-    try { await navigator.share({ text }); return; } catch (e: any) { if (e.name === "AbortError") return; }
+    navigator.share({ text }).catch(() => {});
+  } else {
+    try { navigator.clipboard.writeText(text); } catch {}
   }
-  try { await navigator.clipboard.writeText(text); } catch {}
 }
