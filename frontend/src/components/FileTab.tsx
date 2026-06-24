@@ -5,7 +5,7 @@ import { workerApi, enableFilePicker, type Progress, type InspectResult } from "
 import { backendApi } from "../lib/api";
 import { generateThumbnail, type ThumbResult } from "../lib/thumbnail";
 import { formatBytes, formatDate, downloadBlob, guessMime, getExtension } from "../lib/format";
-import { isOPFSSupported } from "../lib/opfs";
+import { streamDecryptFile } from "../lib/stream-decrypt";
 import { ProgressBar, Empty } from "./ui";
 import { FileDrop } from "./FileDrop";
 import { PasswordEmojiPreview } from "./PasswordEmojiPreview";
@@ -96,33 +96,22 @@ export function FileTab() {
     if (previewCleanup) { try { await previewCleanup(); } catch {} previewCleanup = null; }
     setDecProgress({ done: 0, total: f.size, phase: "解密中" });
     try {
-      let mime = "";
       if (mode() === "local") {
-        const result = await workerApi.decryptFile(f, decPw(), setDecProgress);
-        mime = result.meta?.mimeType || decMeta()?.meta.mimeType || "";
-        if (result.url) {
-          // OPFS streaming — URL already created, blob freed from memory
-          setDecPreviewUrl(result.url);
-          previewCleanup = async () => { URL.revokeObjectURL(result.url!); };
-          toast("success", `解密完成 · ${formatBytes(result.size)}`);
-          if (/^image\/|^video\//.test(mime)) {
-            toast("info", mime.startsWith("video/") ? "视频预览已加载" : "图片预览已加载");
-          }
-        } else if (result.blob) {
-          setDecBlob(result.blob);
-          toast("success", `解密完成 · ${formatBytes(result.blob.size)}`);
-          // For images/videos without OPFS, create Blob URL
-          if (/^image\/|^video\//.test(mime)) {
-            const url = URL.createObjectURL(result.blob);
-            setDecPreviewUrl(url);
-            previewCleanup = async () => URL.revokeObjectURL(url);
-          }
-        } else if (result.streamed) {
-          toast("success", `解密完成 · 已保存到文件 (${formatBytes(result.size)})`);
+        // Main-thread streaming decrypt — avoids WebWorker memory doubling.
+        // Writes directly to OPFS (or Blob), peak memory ~4MB per GCM chunk.
+        const result = await streamDecryptFile(f, decPw(), (done, total) => {
+          setDecProgress({ done, total, phase: "解密中" });
+        });
+        setDecPreviewUrl(result.url);
+        previewCleanup = result.cleanup;
+        const mime = result.meta?.mimeType || "";
+        toast("success", `解密完成 · ${formatBytes(result.size)}`);
+        if (/^image\/|^video\//.test(mime)) {
+          toast("info", mime.startsWith("video/") ? "视频预览已加载" : "图片预览已加载");
         }
       } else {
         const blob = await backendApi.decryptFile(f, decPw());
-        mime = decMeta()?.meta.mimeType || "";
+        const mime = decMeta()?.meta.mimeType || "";
         setDecBlob(blob);
         toast("success", `解密完成 · ${formatBytes(blob.size)}`);
         if (/^image\/|^video\//.test(mime)) {
