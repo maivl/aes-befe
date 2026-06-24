@@ -1,6 +1,7 @@
 // WebWorker: runs all crypto locally via Zig-compiled crypto.wasm (AES-256-GCM).
-// Streams file data — NEVER loads the entire file into memory.
-// Uses file.stream() for both inspect and decrypt (iOS Safari safe).
+// Key fix: Worker writes decrypted chunks DIRECTLY to OPFS (no postMessage for
+// chunks → no memory doubling → no iOS Safari OOM).
+// Worker has access to navigator.storage.getDirectory() — can create OPFS files.
 import { getZigCore } from "@crypto-core/src/zig-loader-web";
 import {
   encryptFileStream,
@@ -26,34 +27,11 @@ type Req =
 
 function post(msg: any) { (self as any).postMessage(msg); }
 
-/** Convert a ReadableStream to AsyncIterable (for file.stream()). */
 function streamIter(stream: ReadableStream<Uint8Array>): AsyncIterable<Uint8Array> {
   const reader = stream.getReader();
   return { [Symbol.asyncIterator]() {
     return {
-      async next() {
-        const r = await reader.read();
-        if (r.done) return { value: undefined, done: true as const };
-        return { value: r.value as Uint8Array, done: false as const };
-      },
-      async return() { try { await reader.cancel(); } catch {} return { value: undefined, done: true as const }; },
-    };
-  }};
-}
-
-/** File stream with progress reporting. */
-function fileStreamWithProgress(stream: ReadableStream<Uint8Array>, id: number, total: number, phase: string): AsyncIterable<Uint8Array> {
-  const reader = stream.getReader();
-  return { [Symbol.asyncIterator]() {
-    let done = 0;
-    return {
-      async next() {
-        const r = await reader.read();
-        if (r.done) return { value: undefined, done: true as const };
-        const v = r.value as Uint8Array; done += v.length;
-        post({ id, type: "progress", done, total, phase });
-        return { value: v, done: false as const };
-      },
+      async next() { const r = await reader.read(); if (r.done) return { value: undefined, done: true as const }; return { value: r.value as Uint8Array, done: false as const }; },
       async return() { try { await reader.cancel(); } catch {} return { value: undefined, done: true as const }; },
     };
   }};
@@ -63,76 +41,75 @@ async function handle(req: Req) {
   const { id, type } = req;
   try {
     const c = await core();
+
     if (type === "encryptFile") {
       const { file, password, meta, thumbnail } = req;
       const stream = file.stream() as ReadableStream<Uint8Array>;
-      let totalSize = 0;
+      // For encrypt: collect chunks into Blob (encrypted .enc is downloaded by user)
+      const parts: Uint8Array[] = [];
       for await (const chunk of encryptFileStream({
         core: c, meta, thumbnail, password: utf8Encode(password),
-        plaintext: fileStreamWithProgress(stream, id, file.size, "加密中"),
+        plaintext: streamIter(stream),
         onProgress: (done, total) => post({ id, type: "progress", done, total, phase: "加密中" }),
       })) {
-        const copy = new Uint8Array(chunk.length);
-        copy.set(chunk);
-        post({ id, type: "chunk", data: copy.buffer });
-        totalSize += chunk.length;
+        // Copy chunk (it's a view into wasm memory which gets reset on next call)
+        parts.push(new Uint8Array(chunk));
       }
-      post({ id, type: "done", size: totalSize });
+      const blob = new Blob(parts, { type: "application/octet-stream" });
+      post({ id, type: "done", blob, size: blob.size });
+
     } else if (type === "decryptFile") {
       const { file, password } = req;
-      // Stream the file directly — do NOT load into memory via arrayBuffer()
+      // Stream the file — do NOT load via arrayBuffer()
       const stream = file.stream() as ReadableStream<Uint8Array>;
-      const streamReader = stream.getReader();
+      const reader = stream.getReader();
 
-      // First pass: read just enough for inspect (header only)
-      // ByteReader will buffer just the header and stop
-      const inspectIter: AsyncIterable<Uint8Array> = {
-        [Symbol.asyncIterator]() {
-          return {
-            async next() {
-              const r = await streamReader.read();
-              if (r.done) return { value: undefined, done: true as const };
-              return { value: r.value as Uint8Array, done: false as const };
-            },
-          };
-        },
-      };
-
-      // We can't use inspectFileStream directly because it consumes the stream.
-      // Instead, read the header manually, then feed [header + remaining] to decrypt.
-      // Read enough for: magic(4) + ver(1) + flags(1) + rsv(2) + jsonLen(4) = 12 bytes
+      // --- Parse header by reading just enough bytes ---
       let buf = new Uint8Array(0);
-      let m: FileMeta | null = null;
-      let thumbnailBase64: string | undefined;
-
-      // Read until we have the full header
       const readMore = async (need: number) => {
         while (buf.length < need) {
-          const r = await streamReader.read();
+          const r = await reader.read();
           if (r.done) break;
           const merged = new Uint8Array(buf.length + r.value.length);
-          merged.set(buf, 0);
-          merged.set(r.value, buf.length);
+          merged.set(buf, 0); merged.set(r.value, buf.length);
           buf = merged;
         }
       };
-
       await readMore(12);
       if (utf8Decode(buf.subarray(0, 4)) !== "ENC1") throw new Error("Not ENC1");
       if (buf[4] !== 2) throw new Error("Unsupported version");
       const jl = (buf[8] | (buf[9] << 8) | (buf[10] << 16) | (buf[11] << 24)) >>> 0;
-      await readMore(12 + jl + 4); // + jsonLen + thumbnailLen
+      await readMore(12 + jl + 4);
       const tl = (buf[12 + jl] | (buf[13 + jl] << 8) | (buf[14 + jl] << 16) | (buf[15 + jl] << 24)) >>> 0;
-      const fullHeader = 12 + jl + 4 + tl + 16 + 12 + 4; // +thumb +salt +nonce +chunkSize
+      const fullHeader = 12 + jl + 4 + tl + 16 + 12 + 4;
       await readMore(fullHeader);
 
-      m = JSON.parse(utf8Decode(buf.subarray(12, 12 + jl)));
+      const meta: FileMeta = JSON.parse(utf8Decode(buf.subarray(12, 12 + jl)));
+      let thumbnailBase64: string | undefined;
       if (tl > 0) {
         const thumb = buf.subarray(12 + jl + 4, 12 + jl + 4 + tl);
         thumbnailBase64 = bytesToBase64(thumb);
       }
 
-      // Remaining data in buf (ciphertext) + rest of stream
+      // --- Set up OPFS for direct write (Worker can access OPFS!) ---
+      // This is the key fix: write decrypted chunks to OPFS inside the worker,
+      // avoiding postMessage chunk transfer (which doubles memory on iOS Safari).
+      const opfsAvailable = typeof (self as any).navigator?.storage?.getDirectory === "function";
+      let opfsRoot: any = null, opfsFileHandle: any = null, opfsWriter: any = null;
+      const blobParts: Uint8Array[] = [];
+      let totalSize = 0;
+
+      if (opfsAvailable) {
+        try {
+          opfsRoot = await (self as any).navigator.storage.getDirectory();
+          const safeName = (meta.originalName || "decrypted").replace(/[^a-zA-Z0-9._-]/g, "_");
+          opfsFileHandle = await opfsRoot.getFileHandle(safeName, { create: true });
+          const writable = await opfsFileHandle.createWritable();
+          opfsWriter = writable.getWriter();
+        } catch { opfsWriter = null; }
+      }
+
+      // --- Combined ciphertext iterable ---
       const remaining = buf.subarray(fullHeader);
       const ciphertextIter: AsyncIterable<Uint8Array> = {
         [Symbol.asyncIterator]() {
@@ -143,7 +120,7 @@ async function handle(req: Req) {
                 sentRemaining = true;
                 if (remaining.length > 0) return { value: remaining, done: false as const };
               }
-              const r = await streamReader.read();
+              const r = await reader.read();
               if (r.done) return { value: undefined, done: true as const };
               return { value: r.value as Uint8Array, done: false as const };
             },
@@ -151,18 +128,41 @@ async function handle(req: Req) {
         },
       };
 
-      post({ id, type: "progress", done: 0, total: m?.originalSize || 0, phase: "解密中" });
-      for await (const chunk of decryptFileStream({
-        core: c, password: utf8Encode(password), ciphertext: ciphertextIter,
-        onProgress: (done, total) => post({ id, type: "progress", done, total, phase: "解密中" }),
-      })) {
-        const copy = new Uint8Array(chunk.length);
-        copy.set(chunk);
-        post({ id, type: "chunk", data: copy.buffer });
+      post({ id, type: "progress", done: 0, total: meta.originalSize, phase: "解密中" });
+
+      // --- Decrypt chunk by chunk, write directly to OPFS (no postMessage!) ---
+      try {
+        for await (const chunk of decryptFileStream({
+          core: c, password: utf8Encode(password), ciphertext: ciphertextIter,
+          onProgress: (done, total) => post({ id, type: "progress", done, total, phase: "解密中" }),
+        })) {
+          totalSize += chunk.length;
+          if (opfsWriter) {
+            // Write directly to OPFS — chunk stays in wasm heap, no copy needed
+            await opfsWriter.write(new Uint8Array(chunk));
+          } else {
+            // Fallback: collect in memory (for browsers without OPFS)
+            blobParts.push(new Uint8Array(chunk));
+          }
+        }
+      } catch (e) {
+        if (opfsWriter) { try { await opfsWriter.abort(); } catch {} }
+        throw e;
       }
-      post({ id, type: "done", size: m?.originalSize || 0, meta: m, thumbnailBase64 });
+
+      // --- Finalize ---
+      if (opfsWriter) {
+        await opfsWriter.close();
+        // Don't create URL in worker — worker URLs aren't accessible from main thread.
+        // Just send the OPFS filename; main thread opens the file and creates URL.
+        post({ id, type: "done", size: totalSize, meta, thumbnailBase64, opfsName: opfsFileHandle.name });
+      } else {
+        // Blob fallback — transfer the blob to main thread
+        const blob = new Blob(blobParts, { type: meta.mimeType || "application/octet-stream" });
+        post({ id, type: "done", blob, size: blob.size, meta, thumbnailBase64 });
+      }
+
     } else if (type === "inspectFile") {
-      // Stream inspect — don't load entire file
       const stream = req.file.stream() as ReadableStream<Uint8Array>;
       const insp = await inspectFileStream(streamIter(stream));
       post({ id, type: "done", meta: insp.meta, hasThumbnail: !!insp.thumbnail && insp.thumbnail.length > 0, thumbnailBase64: insp.thumbnail && insp.thumbnail.length ? bytesToBase64(insp.thumbnail) : undefined, dataOffset: insp.dataOffset });

@@ -5,7 +5,6 @@ import { workerApi, enableFilePicker, type Progress, type InspectResult } from "
 import { backendApi } from "../lib/api";
 import { generateThumbnail, type ThumbResult } from "../lib/thumbnail";
 import { formatBytes, formatDate, downloadBlob, guessMime, getExtension } from "../lib/format";
-import { streamDecryptFile } from "../lib/stream-decrypt";
 import { ProgressBar, Empty } from "./ui";
 import { FileDrop } from "./FileDrop";
 import { PasswordEmojiPreview } from "./PasswordEmojiPreview";
@@ -97,14 +96,31 @@ export function FileTab() {
     setDecProgress({ done: 0, total: f.size, phase: "解密中" });
     try {
       if (mode() === "local") {
-        // Main-thread streaming decrypt — avoids WebWorker memory doubling.
-        // Writes directly to OPFS (or Blob), peak memory ~4MB per GCM chunk.
-        const result = await streamDecryptFile(f, decPw(), (done, total) => {
-          setDecProgress({ done, total, phase: "解密中" });
-        });
-        setDecPreviewUrl(result.url);
-        previewCleanup = result.cleanup;
-        const mime = result.meta?.mimeType || "";
+        // Worker streams file → decrypts → writes directly to OPFS (no chunk
+        // postMessage → no memory doubling → no iOS Safari OOM).
+        const result = await workerApi.decryptFile(f, decPw(), (p) => setDecProgress(p));
+        const mime = result.meta?.mimeType || decMeta()?.meta.mimeType || "";
+        if (result.url) {
+          // OPFS path: worker wrote to OPFS, URL is from OPFS file
+          setDecPreviewUrl(result.url);
+          previewCleanup = async () => {
+            URL.revokeObjectURL(result.url!);
+            // Also clean up OPFS file
+            if (result.opfsName) {
+              try {
+                const root = await (navigator as any).storage.getDirectory();
+                await root.removeEntry(result.opfsName);
+              } catch {}
+            }
+          };
+        } else if (result.blob) {
+          setDecBlob(result.blob);
+          if (/^image\/|^video\//.test(mime)) {
+            const url = URL.createObjectURL(result.blob);
+            setDecPreviewUrl(url);
+            previewCleanup = async () => URL.revokeObjectURL(url);
+          }
+        }
         toast("success", `解密完成 · ${formatBytes(result.size)}`);
         if (/^image\/|^video\//.test(mime)) {
           toast("info", mime.startsWith("video/") ? "视频预览已加载" : "图片预览已加载");
