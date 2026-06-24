@@ -3,22 +3,14 @@
   "buildCommand": "cd frontend && bun install && bun run build",
   "outputDirectory": "frontend/dist",
   "installCommand": "cd frontend && bun install",
-  "rewrites": [
-    { "source": "/((?!api/).*)", "destination": "/index.html" }
-  ],
+  "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }],
   "headers": [
-    {
-      "source": "/crypto.wasm",
-      "headers": [
-        { "key": "Content-Type", "value": "application/wasm" },
-        { "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }
-      ]
-    },
-    {
-      "source": "/assets/(.*)",
-      "headers": [
-        { "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }
-      ]
-    }
+    { "source": "/crypto.wasm", "headers": [
+      { "key": "Content-Type", "value": "application/wasm" },
+      { "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }
+    ]},
+    { "source": "/assets/(.*)", "headers": [
+      { "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }
+    ]}
   ]
 }

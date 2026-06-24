@@ -1,5 +1,4 @@
-// WebWorker: runs all crypto locally via the Zig-compiled crypto.wasm.
-// Plaintext never leaves the browser. Files are streamed in 512KB chunks.
+// WebWorker: runs all crypto locally via the Zig-compiled crypto.wasm (AES-256-GCM).
 import { getZigCore } from "@crypto-core/src/zig-loader-web";
 import {
   encryptFileStream,
@@ -13,10 +12,7 @@ import {
 } from "@crypto-core/src/format";
 
 let coreReady: Promise<any> | null = null;
-function core() {
-  if (!coreReady) coreReady = getZigCore();
-  return coreReady;
-}
+function core() { if (!coreReady) coreReady = getZigCore(); return coreReady; }
 
 type Req =
   | { id: number; type: "encryptFile"; file: File; password: string; meta: FileMeta; thumbnail?: Uint8Array }
@@ -27,7 +23,7 @@ type Req =
 
 function post(msg: any) { (self as any).postMessage(msg); }
 
-const CHUNK_SIZE = 512 * 1024; // 512KB — fits easily in 64MB wasm heap (input+output = 1MB)
+const CHUNK_SIZE = 512 * 1024;
 
 function bytesIter(bytes: Uint8Array): AsyncIterable<Uint8Array> {
   return { [Symbol.asyncIterator]() {
@@ -38,14 +34,12 @@ function bytesIter(bytes: Uint8Array): AsyncIterable<Uint8Array> {
 
 function chunkedBytesIter(bytes: Uint8Array, id: number, phase: string): AsyncIterable<Uint8Array> {
   return { [Symbol.asyncIterator]() {
-    let off = 0;
-    const total = bytes.length;
+    let off = 0; const total = bytes.length;
     return {
       async next() {
         if (off >= total) return { value: undefined, done: true as const };
         const end = Math.min(off + CHUNK_SIZE, total);
-        const chunk = bytes.subarray(off, end);
-        off = end;
+        const chunk = bytes.subarray(off, end); off = end;
         post({ id, type: "progress", done: off, total, phase });
         return { value: chunk, done: false as const };
       },
@@ -78,28 +72,19 @@ async function handle(req: Req) {
       const { file, password, meta, thumbnail } = req;
       const stream = file.stream() as ReadableStream<Uint8Array>;
       const parts: Uint8Array[] = [];
-      for await (const chunk of encryptFileStream({ core: c, meta, thumbnail, password: utf8Encode(password), plaintext: countingIter(stream, id, file.size, "加密中") })) {
-        parts.push(chunk);
-      }
+      for await (const chunk of encryptFileStream({ core: c, meta, thumbnail, password: utf8Encode(password), plaintext: countingIter(stream, id, file.size, "加密中") })) parts.push(chunk);
       const blob = new Blob(parts, { type: "application/octet-stream" });
       post({ id, type: "done", blob, size: blob.size });
     } else if (type === "decryptFile") {
       const { file, password } = req;
       const bytes = new Uint8Array(await file.arrayBuffer());
-      let meta: FileMeta | null = null;
-      let thumbnailBase64: string | undefined;
-      try {
-        const insp = await inspectFileStream(bytesIter(bytes));
-        meta = insp.meta;
-        if (insp.thumbnail && insp.thumbnail.length) thumbnailBase64 = bytesToBase64(insp.thumbnail);
-      } catch {}
+      let m: FileMeta | null = null; let thumbnailBase64: string | undefined;
+      try { const insp = await inspectFileStream(bytesIter(bytes)); m = insp.meta; if (insp.thumbnail && insp.thumbnail.length) thumbnailBase64 = bytesToBase64(insp.thumbnail); } catch {}
       post({ id, type: "progress", done: 0, total: bytes.length, phase: "解密中" });
       const parts: Uint8Array[] = [];
-      for await (const chunk of decryptFileStream({ core: c, password: utf8Encode(password), ciphertext: chunkedBytesIter(bytes, id, "解密中") })) {
-        parts.push(chunk);
-      }
-      const blob = new Blob(parts, { type: meta?.mimeType || "application/octet-stream" });
-      post({ id, type: "done", blob, size: blob.size, meta, thumbnailBase64 });
+      for await (const chunk of decryptFileStream({ core: c, password: utf8Encode(password), ciphertext: chunkedBytesIter(bytes, id, "解密中") })) parts.push(chunk);
+      const blob = new Blob(parts, { type: m?.mimeType || "application/octet-stream" });
+      post({ id, type: "done", blob, size: blob.size, meta: m, thumbnailBase64 });
     } else if (type === "inspectFile") {
       const bytes = new Uint8Array(await req.file.arrayBuffer());
       const insp = await inspectFileStream(bytesIter(bytes));
@@ -111,9 +96,7 @@ async function handle(req: Req) {
       const { text, meta } = await decryptTextFromBase64(c, req.base64, utf8Encode(req.password));
       post({ id, type: "done", text, meta });
     }
-  } catch (e: any) {
-    post({ id, type: "error", message: e?.message || String(e) });
-  }
+  } catch (e: any) { post({ id, type: "error", message: e?.message || String(e) }); }
 }
 
 self.addEventListener("message", (e: MessageEvent<Req>) => handle(e.data));

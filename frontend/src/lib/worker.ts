@@ -1,4 +1,3 @@
-// Singleton WebWorker client for the Zig-backed crypto.
 import type { FileMeta } from "@crypto-core/src/format";
 
 let worker: Worker | null = null;

@@ -1,4 +1,4 @@
-import { For } from "solid-js";
+import { For, Show } from "solid-js";
 import { toasts } from "../store";
 
 export function ProgressBar(props: { done: number; total: number; phase?: string }) {
@@ -21,11 +21,11 @@ export function ProgressBar(props: { done: number; total: number; phase?: string
 
 export function Toasts() {
   return (
-    <div class="fixed top-4 right-4 z-50 flex flex-col gap-2 max-w-sm">
+    <div class="toast-container">
       <For each={toasts()}>
         {(t) => (
           <div
-            class={`px-3.5 py-2.5 rounded-xl text-[13px] border shadow-sm font-medium ${
+            class={`toast px-4 py-2.5 rounded-xl text-[13px] border shadow-sm font-medium ${
               t.type === "success"
                 ? "bg-[var(--color-bg)] border-[var(--color-success)]/30 text-[var(--color-success)]"
                 : t.type === "error"
