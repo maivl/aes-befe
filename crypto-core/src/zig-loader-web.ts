@@ -1,10 +1,15 @@
 // zig-loader browser — loads crypto.wasm (compiled from the unified Zig source)
-// and exposes a typed JS API. Runs inside the WebWorker. All crypto primitives
-// execute in the Zig-compiled Wasm module.
+// and exposes a typed JS API. Runs inside the WebWorker.
 //
-// Memory: JS calls zig_alloc(n) to get a pointer inside Zig's own scratch heap
-// (past static data). This avoids the "memory access out of bounds" bug where
-// a JS-side bump allocator starting at address 0 overwrote Zig's ctx_pool.
+// Memory management: JS calls zig_alloc(n) to get a pointer inside Zig's scratch
+// heap. Before EACH top-level operation (deriveKey, encrypt*, decrypt*), we call
+// zig_reset_heap() to reclaim all scratch space. This prevents the "offset is out
+// of bounds" bug where the bump allocator's wrap-around overwrote buffers still
+// in use.
+//
+// If zig_alloc returns 0 (heap exhausted), we throw a clear error. The worker
+// feeds large files in 512KB chunks so this should never happen for files up to
+// ~60MB per chunk (64MB heap, input + output = 2x chunk size).
 
 export const ZIG_CONST = {
   BLOCK_LEN: 16,
@@ -20,16 +25,14 @@ let exports: any = null;
 
 async function loadWasm(): Promise<void> {
   if (wasm) return;
-  // Cache-bust: append a version query so browsers always fetch the latest
-  // wasm (avoids "zig_alloc is not a function" from stale cached versions).
-  const res = await fetch("/crypto.wasm?v=3");
+  // Cache-bust: version query so browsers always fetch the latest wasm.
+  const res = await fetch("/crypto.wasm?v=4");
   const bytes = new Uint8Array(await res.arrayBuffer());
   const mod = await WebAssembly.compile(bytes);
   const inst = await WebAssembly.instantiate(mod, {});
   wasm = inst;
   exports = inst.exports;
   memory = exports.memory as WebAssembly.Memory;
-  // Verify the critical export exists.
   if (typeof (exports as any).zig_alloc !== "function") {
     throw new Error("crypto.wasm is missing zig_alloc export — clear browser cache and reload");
   }
@@ -40,9 +43,21 @@ function mem(): Uint8Array {
   return new Uint8Array((memory as WebAssembly.Memory).buffer);
 }
 
+/** Reset the scratch heap — call before each top-level operation. */
+function resetHeap(): void {
+  if (typeof (exports as any).zig_reset_heap === "function") {
+    (exports as any).zig_reset_heap();
+  } else {
+    // Fallback for older wasm without zig_reset_heap: the alloc function
+    // wraps around at heap end. We can't reset, but 64MB is large enough
+    // for chunked streaming.
+  }
+}
+
 /** Allocate n bytes inside Zig's scratch heap; returns a pointer (number). */
 function alloc(n: number): number {
   const ptr = Number((exports as any).zig_alloc(n));
+  if (!ptr) throw new Error("wasm scratch heap exhausted — file chunk too large");
   return ptr;
 }
 
@@ -69,6 +84,7 @@ export async function getZigCore(): Promise<ZigCore> {
   const e = exports as any;
   return {
     deriveKey(password, salt) {
+      resetHeap();
       const pp = alloc(password.length);
       const sp = alloc(salt.length);
       const op = alloc(ZIG_CONST.KEY_LEN);
@@ -79,6 +95,8 @@ export async function getZigCore(): Promise<ZigCore> {
       return mem().slice(op, op + ZIG_CONST.KEY_LEN);
     },
     cbcEncryptBegin(key, iv) {
+      // NOTE: do NOT reset heap here — deriveKey already reset it and the key
+      // buffer is still needed. The caller resets before begin.
       const kp = alloc(key.length);
       const ip = alloc(iv.length);
       mem().set(key, kp);
@@ -88,6 +106,10 @@ export async function getZigCore(): Promise<ZigCore> {
       return ctx;
     },
     cbcEncryptUpdate(ctx, input) {
+      // Reset heap before each update call so input+output buffers don't
+      // collide with stale data from previous calls. The ctx (in Zig static
+      // data) survives the reset.
+      resetHeap();
       const ip = alloc(input.length);
       const op = alloc(Math.max(16, Math.floor(input.length / 16) * 16));
       mem().set(input, ip);
@@ -95,6 +117,7 @@ export async function getZigCore(): Promise<ZigCore> {
       return mem().slice(op, op + n);
     },
     cbcEncryptFinal(ctx) {
+      resetHeap();
       const op = alloc(16);
       const n = toNum(e.zig_cbc_encrypt_final(ctx, op));
       return mem().slice(op, op + n);
@@ -109,6 +132,7 @@ export async function getZigCore(): Promise<ZigCore> {
       return ctx;
     },
     cbcDecryptUpdate(ctx, input) {
+      resetHeap();
       const ip = alloc(input.length);
       const op = alloc(Math.max(16, Math.floor(input.length / 16) * 16));
       mem().set(input, ip);
@@ -116,12 +140,14 @@ export async function getZigCore(): Promise<ZigCore> {
       return mem().slice(op, op + n);
     },
     cbcDecryptFinal(ctx) {
+      resetHeap();
       const op = alloc(16);
       const n = toNum(e.zig_cbc_decrypt_final(ctx, op));
       if (n < 0) throw new Error("Invalid PKCS7 padding");
       return mem().slice(op, op + n);
     },
     cbcEncryptOneshot(key, iv, input) {
+      resetHeap();
       const kp = alloc(key.length);
       const ip2 = alloc(iv.length);
       const inp = alloc(input.length);
@@ -134,6 +160,7 @@ export async function getZigCore(): Promise<ZigCore> {
       return mem().slice(op, op + n);
     },
     cbcDecryptOneshot(key, iv, input) {
+      resetHeap();
       const kp = alloc(key.length);
       const ip2 = alloc(iv.length);
       const inp = alloc(input.length);
@@ -146,6 +173,7 @@ export async function getZigCore(): Promise<ZigCore> {
       return mem().slice(op, op + n);
     },
     sha256(input) {
+      resetHeap();
       const ip = alloc(input.length);
       const op = alloc(32);
       mem().set(input, ip);
@@ -153,6 +181,7 @@ export async function getZigCore(): Promise<ZigCore> {
       return mem().slice(op, op + 32);
     },
     hmacSha256(key, msg) {
+      resetHeap();
       const kp = alloc(key.length);
       const mp = alloc(msg.length);
       const op = alloc(32);

@@ -53,23 +53,28 @@ fn free_ctx(c: *CbcCtx) void {
 
 // ---- JS scratch heap (managed by Zig, past all static data) ----
 // JS calls zig_alloc to get a pointer for input/output buffers. This avoids
-// collisions with Zig's static data (ctx_pool etc.) that caused "memory access
-// out of bounds" when the JS-side bump allocator started at address 0.
-// 64MB is enough for large file chunks (the worker feeds data in chunks, not
-// all at once). If a single allocation exceeds this, zig_alloc wraps around.
+// collisions with Zig's static data (ctx_pool etc.).
+// JS calls zig_reset_heap() at the start of each top-level operation to reclaim
+// all scratch space (single-threaded, sequential). zig_alloc NEVER wraps around
+// — if the heap is exhausted, it returns 0 (error), preventing the "offset is
+// out of bounds" / data-corruption bugs that wrap-around caused.
 const JS_HEAP_SIZE: usize = 64 * 1024 * 1024; // 64MB scratch
 var js_heap: [JS_HEAP_SIZE]u8 = undefined;
 var js_heap_off: usize = 0;
 
-export fn zig_alloc(n: usize) [*]u8 {
+export fn zig_reset_heap() void {
+    js_heap_off = 0;
+}
+
+export fn zig_alloc(n: usize) usize {
     const aligned = (js_heap_off + 15) & ~@as(usize, 15);
-    if (aligned + n > JS_HEAP_SIZE) {
-        // wrap around (single-threaded, sequential calls)
-        js_heap_off = 0;
-        return @ptrCast(&js_heap[0]);
+    if (n == 0 or aligned + n > JS_HEAP_SIZE) {
+        // Out of scratch space — caller must reset heap between operations and
+        // stream large files in chunks smaller than JS_HEAP_SIZE.
+        return 0;
     }
     js_heap_off = aligned + n;
-    return @ptrCast(&js_heap[aligned]);
+    return @intFromPtr(&js_heap[aligned]);
 }
 
 // Hash a password-derived key to an emoji index (0..95). One-way: uses the
