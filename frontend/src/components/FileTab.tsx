@@ -153,7 +153,7 @@ export function FileTab() {
   return (
     <div class="grid lg:grid-cols-2 gap-4">
       {/* ENCRYPT */}
-      <div class="surface p-5">
+      <div class="surface p-5" style="box-shadow: 0 3px 63px rgba(0, 0, 0, 0.1);">
         <div class="flex items-center justify-between mb-4">
           <h2 class="text-[15px] font-semibold text-[var(--color-fg)]">文件加密</h2>
           <span class="text-[11px] text-[var(--color-muted)]">GCM · OPFS</span>

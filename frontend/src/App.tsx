@@ -95,22 +95,32 @@ export default function App() {
 
         <main class="flex-1 max-w-3xl w-full mx-auto px-4 py-6">
           <div class="mb-6">
-            <h1 class="text-2xl font-bold text-[var(--color-fg)] tracking-tight">统一 GCM 加密</h1>
-            <p class="text-[13px] text-[var(--color-muted)] mt-1.5 leading-relaxed">
+            <h1 class="text-2xl font-bold text-[var(--color-fg)] tracking-tight" style="text-shadow:
+    1px 1px 0 #cbd5e1,
+    2px 2px 0 #cbd5e1,
+    3px 3px 0 #cbd5e1,
+    4px 4px 0 #94a3b8,
+    5px 5px 0 #94a3b8,
+    6px 6px 0 #64748b,
+    7px 7px 0 #64748b,
+    8px 8px 0 #475569,
+    9px 9px 0 #334155,
+    10px 10px 18px rgba(0,0,0,0.35);">Fynut</h1>
+            <p class="text-[13px] text-[var(--color-muted)] mt-1.5 leading-relaxed opacity-60">
               AES-256-GCM + PBKDF2-HMAC-SHA256 认证加密，无需填充，支持大文件流式加密与文本加密。加密文件自带结构化元信息与内嵌缩略图，可免密预览。
             </p>
             <div class="flex flex-wrap items-center gap-2 mt-3">
-              <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-medium bg-[var(--color-surface-2)] text-[var(--color-fg-secondary)] border border-[var(--color-border)]">AES-256-GCM</span>
-              <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-medium bg-[var(--color-surface-2)] text-[var(--color-fg-secondary)] border border-[var(--color-border)]">PBKDF2 10万次</span>
-              <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-medium bg-[var(--color-surface-2)] text-[var(--color-fg-secondary)] border border-[var(--color-border)]">AEAD 认证加密</span>
-              <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium bg-[var(--color-surface-2)] text-[var(--color-fg-secondary)] border border-[var(--color-border)]">
+              <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-medium bg-[var(--color-surface-2)] text-[var(--color-fg-secondary)] border-[var(--color-border)] bg-green-50">AES-256-GCM</span>
+              <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-medium bg-[var(--color-surface-2)] text-[var(--color-fg-secondary)] border-[var(--color-border)] bg-emerald-50">PBKDF2 10万次</span>
+              <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-medium bg-[var(--color-surface-2)] text-[var(--color-fg-secondary)] border-[var(--color-border)] bg-lime-50">AEAD 认证加密</span>
+              <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium bg-[var(--color-surface-2)] text-[var(--color-fg-secondary)] border-[var(--color-border)] bg-teal-50">
                 <span class={`w-1.5 h-1.5 rounded-full ${backendUp() ? "bg-[var(--color-success)]" : backendUp() === false ? "bg-[var(--color-danger)]" : "bg-[var(--color-muted-light)]"}`} />
                 后端{backendUp() ? "在线" : backendUp() === false ? "离线" : "检测中"}
               </span>
             </div>
           </div>
 
-          <div class="flex items-center gap-1 mb-5 p-1 rounded-xl bg-[var(--color-surface-2)] border border-[var(--color-border)] w-full sm:w-auto sm:inline-flex">
+          <div class="flex items-center gap-1 mb-5 p-1 rounded-xl w-full sm:w-auto sm:inline-flex">
             <For each={TABS}>
               {(t) => (
                 <button class={`tab flex-1 sm:flex-initial ${tab() === t.id ? "tab-active" : ""}`} onClick={() => setTab(t.id)}>

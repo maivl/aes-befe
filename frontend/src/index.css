@@ -56,8 +56,8 @@ input, textarea {
 
 /* Component classes */
 .surface {
-  background: var(--color-bg);
-  border: 1px solid var(--color-border);
+  /* background: var(--color-bg);
+  border: 1px solid var(--color-border); */
   border-radius: 1rem;
 }
 
