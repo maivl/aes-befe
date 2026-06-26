@@ -42,7 +42,7 @@ export default function App() {
   }
 
   return (
-    <div class="min-h-screen flex flex-col bg-[var(--color-bg)]">
+    <div class="min-h-screen flex flex-col bg-[var(--color-bg)]" style="background-image: linear-gradient(178deg, #e0c3fc12 0%, #8ec5fc12 60%, #b1626200 100%);background-size: 100% 300px;background-repeat: no-repeat;">
       <Toasts />
 
       <Show when={page() === "settings"}>
@@ -51,7 +51,7 @@ export default function App() {
 
       <Show when={page() === "main"}>
         {/* Header — fixed to avoid iOS Safari sticky bug on input focus */}
-        <header class="fixed top-0 left-0 right-0 z-40 border-b border-[var(--color-border)] bg-[var(--color-bg)]/90 backdrop-blur-lg">
+        <header class="fixed top-0 left-0 right-0 z-40 border-b border-[var(--color-border)] backdrop-blur">
           <div class="max-w-3xl mx-auto px-4 flex items-center justify-between gap-3" style={{ "padding-top": "max(0.75rem, env(safe-area-inset-top))", "padding-bottom": "0.75rem" }}>
             <div class="flex items-center gap-2.5">
               <img src="/favicon.svg" class="w-8 h-8 rounded-lg" alt="logo" />
