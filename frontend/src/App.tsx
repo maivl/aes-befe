@@ -105,7 +105,7 @@ export default function App() {
     7px 7px 0 #64748b,
     8px 8px 0 #475569,
     9px 9px 0 #334155,
-    10px 10px 18px rgba(0,0,0,0.35);">Fynut</h1>
+    10px 10px 18px rgba(0,0,0,0.35);font-size: 65px;color: #091d02;margin-bottom: 16px;">Fynut</h1>
             <p class="text-[13px] text-[var(--color-muted)] mt-1.5 leading-relaxed opacity-60">
               AES-256-GCM + PBKDF2-HMAC-SHA256 认证加密，无需填充，支持大文件流式加密与文本加密。加密文件自带结构化元信息与内嵌缩略图，可免密预览。
             </p>
